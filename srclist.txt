@@ -450,7 +450,7 @@ usr.bin/procstat
 # `service ldconfig restart`). We ship the REAL service(8) so those succeed and
 # so `service` can drive on-demand rc.d jobs (the overlay ships /etc/rc.d/ldconfig).
 #   * usr.sbin/service -> /usr/sbin/service (sources /etc/rc.subr; execs via env)
-#   * usr.sbin/rcorder -> /usr/sbin/rcorder (needed for service -e/-l/bulk)
+#   * sbin/rcorder     -> /sbin/rcorder (needed for service -e/-l/bulk)
 #   * libexec/rc       -> /libexec/{debug,hooks,safe_eval}.sh helpers (survive
 #                         the /etc strip); its rc.subr installs to /etc and is
 #                         stripped, so rc.subr is vendored in the nextbsd-userland
@@ -458,5 +458,5 @@ usr.bin/procstat
 #                         to the same releng/15.0 the base tracks (version skew).
 # env/sh/cat/ldconfig/sysctl/kenv/libutil are already present above.
 usr.sbin/service
-usr.sbin/rcorder
+sbin/rcorder
 libexec/rc
