@@ -334,6 +334,22 @@ usr.sbin/efibootmgr
 lib/libblocklist
 lib/libcbor
 lib/libfido2
+# gpart/geom class libraries: /sbin/geom (above at sbin/geom) is a DYNAMIC
+# multi-call binary that dlopens /lib/geom/geom_<class>.so at runtime. Without
+# lib/geom, `gpart` has NO create/add/show/destroy/bootcode ("gpart: Unknown
+# command: show") and the installer cannot partition a disk. Builds the whole
+# /lib/geom/ set (part, label, ...).
+lib/geom
+# termcap DB (/usr/share/misc/termcap.db) — without it every curses/vi/less
+# session warns "Cannot read termcap database; using dumb terminal settings".
+# Lands in /usr/share/misc (survives the /etc strip).
+share/termcap
+# A base editor so the console/ssh is usable without pkg (pkg isn't wired up for
+# NextBSD's rebranded ABI). vi = nvi (vi+ex); links ncurses (already in base) +
+# the termcap DB above. (ee/easy-editor dropped: its NLS catalog install symlinks
+# into /usr/share/nls/en_US.ISO8859-1 before that dir exists under cross-install;
+# nano is available via the pkg workaround if a nano-like editor is wanted.)
+usr.bin/vi
 
 # === Standard userland command suites (base BSD tools) ===
 # The curated base previously shipped only bin/sh. The native CI image (no pkg

@@ -88,7 +88,7 @@ jobs:
           # (We normally rely on mtree to pre-create the hierarchy; here we
           # enumerate just the subdirs our srclist entries install into, since
           # `install file dir/` requires dir to pre-exist.)
-          mkdir -p /stage/bin /stage/sbin /stage/lib /stage/libexec \
+          mkdir -p /stage/bin /stage/sbin /stage/lib /stage/lib/geom /stage/libexec \
                    /stage/usr/bin /stage/usr/sbin /stage/usr/lib /stage/usr/libexec \
                    /stage/usr/include /stage/usr/share /stage/usr/libdata/pkgconfig \
                    /stage/usr/lib/engines-3 /stage/usr/lib/ossl-modules \
