@@ -345,10 +345,11 @@ lib/geom
 # Lands in /usr/share/misc (survives the /etc strip).
 share/termcap
 # A base editor so the console/ssh is usable without pkg (pkg isn't wired up for
-# NextBSD's rebranded ABI). vi = nvi (vi+ex); ee = easy editor (nano-like). Both
-# link ncurses (already in base) + the termcap DB above.
+# NextBSD's rebranded ABI). vi = nvi (vi+ex); links ncurses (already in base) +
+# the termcap DB above. (ee/easy-editor dropped: its NLS catalog install symlinks
+# into /usr/share/nls/en_US.ISO8859-1 before that dir exists under cross-install;
+# nano is available via the pkg workaround if a nano-like editor is wanted.)
 usr.bin/vi
-usr.bin/ee
 
 # === Standard userland command suites (base BSD tools) ===
 # The curated base previously shipped only bin/sh. The native CI image (no pkg
