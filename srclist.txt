@@ -324,6 +324,13 @@ lib/libwrap
 lib/libkiconv
 sbin/newfs_msdos
 sbin/mount_msdosfs
+# Live-ISO mfsroot needs these in the rootfs: its /init does mdconfig -t vnode
+# on rootfs.uzip, mount_cd9660 the CD, mount_unionfs the tmpfs overlay, then
+# vfs.pivot. Deps satisfied: mount_cd9660->libkiconv (above), mdconfig->libutil
+# (already listed). mount_unionfs->libc only.
+sbin/mdconfig
+sbin/mount_cd9660
+sbin/mount_unionfs
 usr.sbin/efibootmgr
 # OpenSSH privsep + FIDO helper libs (audited across ALL ssh binaries):
 #   * libblocklist — sshd-session AND sshd-auth DT_NEEDED libblocklist.so.0.
