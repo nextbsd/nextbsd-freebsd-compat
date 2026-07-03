@@ -417,6 +417,12 @@ usr.bin/seq
 usr.bin/sort
 usr.bin/stat
 usr.bin/tail
+# tar: bsdtar. gershwin's `make install` shells out to `tar`, which was absent
+# from the curated base (`/bin/sh: tar: not found`). LIBADD=archive only, and
+# libarchive's full closure (z/bz2/lzma/bsdxml/zstd/crypto) already ships above,
+# so no new lib dirs are needed. Installs /usr/bin/bsdtar + the /usr/bin/tar
+# symlink (usr.bin/tar Makefile: SYMLINKS bsdtar -> tar).
+usr.bin/tar
 usr.bin/tee
 usr.bin/touch
 usr.bin/tr
