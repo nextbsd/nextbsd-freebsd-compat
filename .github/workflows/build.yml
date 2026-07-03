@@ -93,7 +93,7 @@ jobs:
                    /stage/usr/include /stage/usr/share /stage/usr/libdata/pkgconfig \
                    /stage/usr/lib/engines-3 /stage/usr/lib/ossl-modules \
                    /stage/usr/lib/libxo/encoder \
-                   /stage/usr/share/zoneinfo /stage/usr/share/vt/fonts \
+                   /stage/usr/share/locale /stage/usr/share/zoneinfo /stage/usr/share/vt/fonts \
                    /stage/usr/share/vt/keymaps /stage/usr/share/syscons/keymaps \
                    /stage/usr/share/certs/trusted /stage/usr/share/certs/untrusted \
                    /stage/usr/share/certs/blocklisted /stage/etc/ssl /stage/etc/ssh \
