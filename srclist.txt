@@ -473,3 +473,66 @@ usr.bin/procstat
 usr.sbin/service
 sbin/rcorder
 libexec/rc
+
+# ===========================================================================
+# FreeBSD-utilities tranche — the command-suite tools the pkg-based nextbsd ISO
+# (nextbsd#359) needs so the boot-test's file/shell/text/adv/system-cmds LEAF
+# checks pass. These are FreeBSD pkgbase FreeBSD-utilities (default PACKAGE) +
+# a few FreeBSD-runtime LEAF tools — added per-dir, so NONE pull rc.d/init.
+# (The old compiler build got these from Apple's src/ command suites; the pkg
+# design takes them from the curated FreeBSD base instead.)
+# Full DT_NEEDED closure already satisfied above: libmd, libsbuf, libutil,
+# libcrypt, libnv, libcasper, ncurses(libtinfow), libc++/libcxxrt, share/termcap.
+# Path notes: base64 ships from usr.bin/bintrans; sha256/*sum from sbin/md5;
+# lsvfs/mkfifo live under usr.bin/; locate's /etc/locate.rc is stripped by the
+# /stage/etc guard (binary + /usr/libexec/locate.* still ship). Tools removed
+# from FreeBSD 15 base (shar/shlock/mkfile/vifs) are dropped from the check.
+bin/chflags
+bin/ed
+sbin/md5
+sbin/mknod
+usr.bin/apply
+usr.bin/bintrans
+usr.bin/cap_mkdb
+usr.bin/cksum
+usr.bin/colrm
+usr.bin/column
+usr.bin/compress
+usr.bin/csplit
+usr.bin/finger
+usr.bin/getconf
+usr.bin/getopt
+usr.bin/join
+usr.bin/lam
+usr.bin/locale
+usr.bin/locate
+usr.bin/lockf
+usr.bin/logname
+usr.bin/look
+usr.bin/lsvfs
+usr.bin/mkfifo
+usr.bin/newgrp
+usr.bin/nice
+usr.bin/nohup
+usr.bin/pagesize
+usr.bin/pathchk
+usr.bin/pr
+usr.bin/printenv
+usr.bin/renice
+usr.bin/rs
+usr.bin/script
+usr.bin/split
+usr.bin/stdbuf
+usr.bin/tabs
+usr.bin/tty
+usr.bin/ul
+usr.bin/unvis
+usr.bin/vis
+usr.bin/whereis
+usr.bin/who
+usr.bin/whois
+usr.bin/yes
+usr.sbin/accton
+usr.sbin/chown
+usr.sbin/chroot
+usr.sbin/vipw
