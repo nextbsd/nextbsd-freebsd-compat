@@ -530,6 +530,7 @@ usr.bin/unvis
 usr.bin/vis
 usr.bin/whereis
 usr.bin/who
+usr.bin/truncate
 usr.bin/whois
 usr.bin/yes
 usr.sbin/accton
