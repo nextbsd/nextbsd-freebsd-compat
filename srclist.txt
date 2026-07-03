@@ -537,3 +537,31 @@ usr.sbin/accton
 usr.sbin/chown
 usr.sbin/chroot
 usr.sbin/vipw
+
+# === locale data (/usr/share/locale) — FreeBSD-locales parity ===
+# Without these the curated base ships an EMPTY /usr/share/locale, so
+# setlocale(LC_ALL,"") fails for any UTF-8 LANG — including the C.UTF-8 default
+# that login.conf sets (:lang=C.UTF-8:). Symptom: bsdtar and every locale-aware
+# tool print "Failed to set default locale". Verified against a stock FreeBSD
+# 15.0-p9 box: C.UTF-8 is NOT a pure libc builtin here — libc special-cases
+# "C."-prefixed names for every category EXCEPT LC_CTYPE, which is still read
+# from /usr/share/locale/C.UTF-8/LC_CTYPE on disk. So the default needs that one
+# file to exist.
+#
+# localedef is the bootstrap compiler that turns the *def .src sources into the
+# binary LC_* files, so it MUST build+install BEFORE the share/*def dirs that
+# invoke it. share/ctypedef is unconditional and force-installs C.UTF-8/LC_CTYPE
+# (the minimum the C.UTF-8 default needs); the remaining *def(+_unicode) dirs
+# complete LC_COLLATE/MONETARY/NUMERIC/MESSAGES/TIME so named UTF-8 locales
+# (en_US.UTF-8, ...) also resolve — matching pkgbase FreeBSD-locales.
+usr.bin/localedef
+share/ctypedef
+share/colldef
+share/colldef_unicode
+share/monetdef
+share/monetdef_unicode
+share/numericdef
+share/numericdef_unicode
+share/msgdef
+share/msgdef_unicode
+share/timedef
