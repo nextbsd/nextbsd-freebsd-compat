@@ -583,3 +583,11 @@ usr.bin/patch
 usr.bin/xinstall
 usr.bin/top
 usr.bin/ncurses
+
+# === gzip (gzip/gunzip/gzcat/zcat) ===
+# gnustep-make's `make install` compresses manpages with gzip(1); with no gzip
+# on the base the install dies at "Installing (and compressing) manpages"
+# (GNUmakefile:198 Error 1). Deps bz2/lzma/z/zstd are all already in the base
+# (lib/libbz2, lib/liblzma, lib/libz, lib/libzstd->libprivatezstd), so this
+# links cleanly. xz is already present but gnustep-make defaults to gzip.
+usr.bin/gzip
