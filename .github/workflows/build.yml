@@ -1,12 +1,12 @@
-name: Build NextBSD Base (curated)
+name: Build NextBSD Base (buildworld)
 on:
   repository_dispatch:
     types: [toolchain-updated]
   pull_request:
-    # Validate the curated base build (both arches) on PRs touching srclist or
-    # the workflow. PR runs never cascade — the downstream nextbsd ISO dispatch
-    # is gated on github.ref_name == 'main', which is "<PR#>/merge" on a PR.
-    paths: ['srclist.txt', '.github/workflows/build.yml']
+    # Validate the from-source base build (both arches) on PRs touching the strip
+    # scripts or the workflow. PR runs never cascade — the downstream nextbsd ISO
+    # dispatch is gated on github.ref == 'refs/heads/main'.
+    paths: ['scripts/**', '.github/workflows/build.yml']
   workflow_dispatch:
     inputs:
       fbsd_sha:
@@ -16,9 +16,15 @@ on:
 
 env:
   FREEBSD_BRANCH: releng/15.1
-  # Build prereqs only (these install NOTHING to the base): no compiler in base,
-  # no tests/lib32. The base gets ONLY the dirs in srclist.txt via curated install.
-  WORLD_FLAGS: WITHOUT_TOOLCHAIN=yes WITHOUT_TESTS=yes WITHOUT_LIB32=yes WITHOUT_MAN=yes
+  # Full FreeBSD world, EXTERNAL ports-llvm19 toolchain via --cross-bindir: NO base
+  # compiler is built or installed (WITHOUT_TOOLCHAIN gates cross-tools clang/lld
+  # off; the external clang compiles the world). No tests/lib32/man/debug in the
+  # base. krb5 is explicitly enabled — FreeBSD 15 defaults MK_KERBEROS=no, but the
+  # consumer needs libkrb5/GSSAPI (sshd GSSAPI, curl/git).
+  WORLD_FLAGS: >-
+    WITHOUT_TOOLCHAIN=yes WITHOUT_TESTS=yes WITHOUT_LIB32=yes WITHOUT_MAN=yes
+    WITHOUT_DEBUG_FILES=yes MK_KERBEROS=yes MK_KERBEROS_SUPPORT=yes
+    MK_MITKRB5=yes MK_GSSAPI=yes
 
 jobs:
   base:
@@ -39,158 +45,87 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Stage the cross sysroot: world toolchain (build-tools + cross-tools, minus
-      # clang via --cross-bindir) + headers. Installs NOTHING to the base.
-      - name: Bootstrap sysroot (toolchain + includes)
+      # Full buildworld with the external ports-llvm19 compiler. buildworld runs
+      # its own _bootstrap-tools/_legacy (host sh/awk/m4/yacc/mtree/makefs — not a
+      # compiler) and _includes/_libraries/everything internally, so the old
+      # explicit toolchain/_includes warm-up is gone.
+      - name: buildworld (external ports llvm19)
         run: |
           cd /usr/src
-          ./tools/build/make.py --cross-bindir="${CROSS_BINDIR}" \
-            TARGET=${{ matrix.target }} TARGET_ARCH=${{ matrix.target_arch }} ${WORLD_FLAGS} \
-            toolchain -j"$(nproc)"
-          ./tools/build/make.py --cross-bindir="${CROSS_BINDIR}" \
-            TARGET=${{ matrix.target }} TARGET_ARCH=${{ matrix.target_arch }} ${WORLD_FLAGS} \
-            _includes -j"$(nproc)"
-
-      # Curated per-directory build into /stage, in the cross buildenv. ONLY the
-      # dirs in srclist.txt are built + installed — nothing else touches the base.
-      - name: Build curated base into /stage
-        run: |
-          cd /usr/src
-          mkdir -p /stage
-          grep -vE '^[[:space:]]*(#|$)' "$GITHUB_WORKSPACE/srclist.txt" > /tmp/srclist
-          cat > /tmp/curated.sh <<'EOS'
-          set -e
-          # buildenv pre-bakes INSTALL/METALOG with an EMPTY DESTDIR. We must
-          # KEEP the -N (FreeBSD user/group db for name resolution on Linux) and
-          # -U (metalog mode — no real chown, which Linux can't do: no `wheel`),
-          # and only fix the DESTDIR. So set INSTALL/METALOG explicitly with /stage.
-          export DESTDIR=/stage
-          export METALOG=/stage/METALOG
-          export INSTALL="install -N /usr/src/etc -U -M /stage/METALOG -D /stage"
-          # Lever B (#278): add /usr/local/lib AND /System/Library/Libraries to
-          # rtld-elf's compiled-in default search path so both ports/pkg binaries
-          # AND NextBSD's own GNUstep daemons (e.g. org.gershwin.dshelper, which is
-          # not rpath-correct and needs libgnustep-base/libobjc from
-          # /System/Library/Libraries) resolve their libs with NO hints file
-          # (robust on the live union + installed UFS; covers setuid too -- those
-          # ignore LD_ELF_HINTS_PATH/$ORIGIN/LD_LIBRARY_PATH). Hints can't be relied
-          # on here: /var->/private/var and a baked /var/run hints file gets
-          # shadowed on unionfs copy-up (#282).
-          # Via make.conf so CFLAGS+= APPENDS to rtld's Makefile flags (a
-          # command-line `make CFLAGS+=` overrides them and drops rtld's -I ->
-          # "debug.h not found"). printf %s keeps the \" literal (C string).
+          # Lever B (#278): bake rtld-elf's compiled-in default search path so
+          # ports/pkg binaries AND NextBSD's GNUstep daemons resolve libs with no
+          # hints file (covers setuid, which ignore LD_* / hints). make.conf so
+          # CFLAGS+= APPENDS to rtld's Makefile flags (a make-cmdline CFLAGS+=
+          # would drop rtld's own -I -> "debug.h not found"). Must precede buildworld.
           printf '%s\n' \
             '.if ${.CURDIR:M*/libexec/rtld-elf}' \
             'CFLAGS+= -DSTANDARD_LIBRARY_PATH=\"/lib:/usr/lib:/usr/lib/system:/System/Library/Libraries:/usr/local/lib\"' \
             '.endif' >> /etc/make.conf
-          # Create ONLY the base-userland target dirs the curated installs need.
-          # NO distrib-dirs, NO FreeBSD mtree, NO /etc, NO /var — nextbsd owns those.
-          # (We normally rely on mtree to pre-create the hierarchy; here we
-          # enumerate just the subdirs our srclist entries install into, since
-          # `install file dir/` requires dir to pre-exist.)
-          mkdir -p /stage/bin /stage/sbin /stage/lib /stage/lib/geom /stage/libexec \
-                   /stage/usr/bin /stage/usr/sbin /stage/usr/lib /stage/usr/libexec \
-                   /stage/usr/include /stage/usr/share /stage/usr/libdata/pkgconfig \
-                   /stage/usr/lib/engines-3 /stage/usr/lib/ossl-modules \
-                   /stage/usr/lib/libxo/encoder \
-                   /stage/usr/share/locale /stage/usr/share/zoneinfo /stage/usr/share/vt/fonts \
-                   /stage/usr/share/vt/keymaps /stage/usr/share/syscons/keymaps \
-                   /stage/usr/share/certs/trusted /stage/usr/share/certs/untrusted \
-                   /stage/usr/share/certs/blocklisted /stage/etc/ssl /stage/etc/ssh \
-                   /stage/boot /stage/boot/lua /stage/boot/defaults /stage/boot/efi
-          # NB: /stage/etc/ssl (openssl.cnf + cert.pem) and /stage/etc/ssh
-          # (sshd_config/ssh_config/moduli) are created so the openssl/caroot and
-          # sshd/ssh installs succeed, then STRIPPED in the Pack step (nextbsd
-          # owns /etc; the nextbsd-userland overlay ships the real sshd_config).
-          # MK_INCLUDES=no per dir (per-dir header installs hit nonstandard
-          # contrib /usr/include subdirs). Headers are staged in bulk below.
-          # The MIT krb5 libs (krb5/lib/*) can't be built per-dir without first
-          # staging their build prerequisites OUTSIDE /stage: the compile_et
-          # build-tool + the et awk scripts must be on PATH / in /usr/share/et
-          # (the ephemeral CI container root, DESTDIR=/), and the generated
-          # headers (krb5.h/com_err.h/gssapi.h) must be in the cross sysroot
-          # include dir (DESTDIR=$SYSROOT) the lib compiles read. FreeBSD 15.0
-          # defaults MK_KERBEROS=no, hence the explicit WITH flags on krb5/*.
-          SYSROOT="/usr/obj/usr/src/${{ matrix.target }}.${{ matrix.target_arch }}/tmp"
-          KRBFLAGS="MK_KERBEROS=yes MK_KERBEROS_SUPPORT=yes MK_MITKRB5=yes MK_GSSAPI=yes"
-          # krb5/include installs into these header subdirs and install(1) needs
-          # them to pre-exist — in /stage (the base) and in the sysroot (staged
-          # build headers). /stage/usr/lib/krb5 is the gssapi plugin dir.
-          mkdir -p /stage/usr/include/krb5 /stage/usr/include/gssapi \
-                   /stage/usr/include/gssrpc /stage/usr/lib/krb5 \
-                   "$SYSROOT/usr/include/krb5" "$SYSROOT/usr/include/gssapi" \
-                   "$SYSROOT/usr/include/gssrpc" "$SYSROOT/usr/lib/krb5" \
-                   /usr/include/krb5 /usr/include/gssapi /usr/include/gssrpc \
-                   /usr/lib/krb5 /usr/share/et
-          stage_for_build() { # $1=srcdir $2=destdir — install tools/headers there
-            make -C "/usr/src/$1" install DESTDIR="$2" \
-              INSTALL="install -N /usr/src/etc -U -M $2/METALOG.krbstage -D $2" \
-              METALOG="$2/METALOG.krbstage" MK_MAN=no MK_INCLUDES=yes $KRBFLAGS
-          }
-          while IFS= read -r d; do
-            echo "::group::build $d"
-            FLAGS=""; INCFLAG="MK_INCLUDES=no"
-            case "$d" in krb5/*) FLAGS="$KRBFLAGS" ;; esac
-            case "$d" in krb5/include) INCFLAG="MK_INCLUDES=yes" ;; esac
-            make -C "/usr/src/$d" obj $FLAGS
-            make -C "/usr/src/$d" all $FLAGS
-            make -C "/usr/src/$d" install $INCFLAG MK_MAN=no $FLAGS
-            # krb5 build prerequisites -> stage to PATH/share (/) AND sysroot
-            case "$d" in
-              krb5/util/support|krb5/util/et|krb5/util/compile_et|krb5/util/profile|krb5/include)
-                stage_for_build "$d" /
-                stage_for_build "$d" "$SYSROOT"
-                ;;
-            esac
-            echo "::endgroup::"
-          done < /tmp/srclist
-          # Stage the FULL FreeBSD /usr/include into the base (for nextbsd chroot
-          # builds of the Apple components). Diagnose the sysroot, then copy the
-          # whole tree via tar pipe (robust for symlinks/perms). The earlier
-          # `cp -a` produced a partial tree (missing stdint.h/sys/types.h).
-          SYSROOT_INC=/usr/obj/usr/src/${{ matrix.target }}.${{ matrix.target_arch }}/tmp/usr/include
-          echo "=== sysroot include diag ==="
-          ls -la "$SYSROOT_INC/stdint.h" "$SYSROOT_INC/sys/types.h" 2>&1 | head
-          echo "    sysroot include entry count: $(find "$SYSROOT_INC" -type f 2>/dev/null | wc -l)"
-          # The sysroot headers are SYMLINKS into the source tree (make _includes
-          # symlink optimization). Dereference with cp -L so /stage gets REAL
-          # header files (tar isn't in buildenv's PATH; cp is).
-          cp -RLp "$SYSROOT_INC/." /stage/usr/include/
-          echo "=== staged /stage/usr/include check ==="
-          ls -la /stage/usr/include/stdint.h /stage/usr/include/sys/types.h 2>&1 | head
-          echo "    staged include entry count: $(find /stage/usr/include -type f | wc -l)"
-          EOS
-          chmod +x /tmp/curated.sh
           ./tools/build/make.py --cross-bindir="${CROSS_BINDIR}" \
             TARGET=${{ matrix.target }} TARGET_ARCH=${{ matrix.target_arch }} ${WORLD_FLAGS} \
-            buildenv BUILDENV_SHELL=/tmp/curated.sh
+            -j"$(nproc)" buildworld
+
+      # installworld (NOT `make distribution`) into /stage. distribution is the
+      # only target that populates /etc + /var CONTENT — we never run it, so the
+      # base ships no config; installworld/distrib-dirs leave only an empty
+      # skeleton, stripped in Pack. NO_ROOT + DB_FROM_SRC reproduce the curated
+      # build's unprivileged Linux-runner semantics (metalog mode, no chown; root/
+      # wheel resolved from the src tree master.passwd) for the WHOLE world.
+      - name: installworld into /stage
+        run: |
+          cd /usr/src
+          mkdir -p /stage
+          set -- --cross-bindir="${CROSS_BINDIR}" \
+                 TARGET=${{ matrix.target }} TARGET_ARCH=${{ matrix.target_arch }} \
+                 ${WORLD_FLAGS}
+          ./tools/build/make.py "$@" distrib-dirs \
+            DESTDIR=/stage NO_ROOT=1 DB_FROM_SRC=1 METALOG=/stage/METALOG
+          ./tools/build/make.py "$@" installworld \
+            DESTDIR=/stage NO_ROOT=1 DB_FROM_SRC=1 METALOG=/stage/METALOG
+
+      # Delete FreeBSD base tools NextBSD replaces with its own implementation
+      # (init->launchd, kld*->kext*/kextd, devd/devmatch->IOKit, bsd{config,install}
+      # ->nextbsd-installer, freebsd-update->pkg). Each listed path is existence-
+      # asserted: a stale entry fails the build so the list gets pruned.
+      - name: Strip superseded base tools
+        run: STAGE=/stage bash "$GITHUB_WORKSPACE/scripts/strip-superseded.sh"
+
+      # Remove every path NextBSD-userland (Apple/Darwin overlay) also ships, so
+      # the overlay owns the canonical copy (pkg forbids two owners). Self-policing:
+      # any base<->userland overlap NOT in scripts/collisions FAILS the build.
+      - name: Strip base<->userland collisions (self-policing)
+        run: STAGE=/stage ARCH=${{ matrix.target }} bash "$GITHUB_WORKSPACE/scripts/strip-collisions.sh"
 
       - name: Inspect /stage
         run: |
-          echo "=== /stage tree ==="; find /stage -maxdepth 3 | head -60
-          echo "=== libc present? ==="; ls -l /stage/lib/libc.so* /stage/libexec/ld-elf.so.1 2>&1 || true
+          echo "=== libc / rtld present? ==="
+          ls -l /stage/lib/libc.so* /stage/libexec/ld-elf.so.1 2>&1 || true
+          echo "=== top-level dirs ==="; find /stage -maxdepth 2 -type d | sort
 
       - name: Pack base artifact
         run: |
-          rm -f /stage/METALOG   # staging manifest byproduct, not part of base
-          # HARD GUARD: nextbsd owns these on the ISO — strip them even if a
-          # tool's Makefile tried to install a config/runtime file.
-          # NB: /boot is now KEPT (stand/ installs the loader there). nextbsd
-          # still owns /boot/kernel (kernel + modules + mach.ko) and the
-          # loader.conf.d overlay, so strip just /boot/kernel from the artifact.
-          rm -rf /stage/etc /stage/var /stage/root /stage/.profile /stage/.cshrc
-          rm -rf /stage/boot/kernel
-          # Re-apply setuid bits (nextbsd#334). The curated build installs
-          # unprivileged (install -U -M METALOG), which records mode=4555 in
-          # METALOG but cannot set the root-owned setuid bit on the staged file;
-          # we deleted METALOG above and tar the raw /stage (no makefs -M), so the
-          # setuid base bins from srclist.txt would otherwise ship as 0555 and
-          # `su`/`login` fail with "su: not running setuid". Ownership is already
-          # root:wheel, so only the bit needs restoring. Keep in sync with the
-          # setuid entries in srclist.txt (today: su, login, shutdown).
-          chmod u+s /stage/usr/bin/su /stage/usr/bin/login /stage/sbin/shutdown
-          echo "=== final base tree (top levels) ==="; find /stage -maxdepth 2 -type d | sort
-          tar -C /stage -czf /tmp/nextbsd-base-${{ matrix.target }}.tar.gz .
+          STAGE=/stage
+          # Re-apply setuid/setgid from METALOG (#334). Unprivileged install records
+          # the mode but can't set the bit; we tar raw /stage (no makefs -M). Drive
+          # the WHOLE world from the manifest (su, login, passwd, crontab, ping,
+          # traceroute, chsh, ...), not the old hardcoded 3-file list.
+          if [ -f "$STAGE/METALOG" ]; then
+            awk '{ m="";
+                   for (i=1;i<=NF;i++) if ($i ~ /^mode=/) { m=$i; sub(/^mode=/,"",m) }
+                   if (m ~ /^0?[2-7][0-7][0-7][0-7]$/) { p=$1; sub(/^\.\//,"",p); print m, p } }' \
+                "$STAGE/METALOG" \
+            | while read -r mode rel; do [ -e "$STAGE/$rel" ] && chmod "$mode" "$STAGE/$rel" || true; done
+          fi
+          rm -f "$STAGE/METALOG"
+          # HARD GUARD: nextbsd/overlays own /etc and /var. Strip the empty skeleton
+          # + boot/kernel (kernel is nextbsd's), then ASSERT /etc and /var are gone.
+          rm -rf "$STAGE"/etc "$STAGE"/var "$STAGE"/root "$STAGE"/.profile "$STAGE"/.cshrc
+          rm -rf "$STAGE"/boot/kernel
+          if [ -e "$STAGE/etc" ] || [ -e "$STAGE/var" ]; then
+            echo "::error::/etc or /var still present after strip — nextbsd must own these"; exit 1
+          fi
+          echo "=== final base tree (top levels) ==="; find "$STAGE" -maxdepth 2 -type d | sort
+          tar -C "$STAGE" -czf /tmp/nextbsd-base-${{ matrix.target }}.tar.gz .
 
       - name: Upload base artifact
         uses: actions/upload-artifact@v4
@@ -198,11 +133,10 @@ jobs:
           name: nextbsd-base-${{ matrix.target }}
           path: /tmp/nextbsd-base-${{ matrix.target }}.tar.gz
 
-  # Refresh the rolling `continuous` release from a successful main build and
-  # then cascade to the nextbsd ISO — in that order, so the ISO ingests this
-  # run's base, not the prior one. Single non-matrix job (collects both arches,
-  # publishes once — no release-creation race). PRs build but never reach here.
-  # End-to-end chain: releng/15.1 -> toolchain -> compat -> nextbsd.
+  # Refresh the rolling `continuous` release from a successful main build and then
+  # cascade to the nextbsd ISO — unchanged from the curated pipeline. Artifact
+  # name/layout are identical, so nextbsd-pkg is unaffected. PRs build but never
+  # reach here (gated on refs/heads/main).
   publish:
     name: publish continuous
     needs: base
@@ -219,19 +153,16 @@ jobs:
       - name: Collect per-arch assets
         run: |
           mkdir -p out
-          # The base artifacts are already tarballs (nextbsd-base-<arch>.tar.gz)
-          # — just gather them; no repackaging needed.
           find artifacts -name 'nextbsd-base-*.tar.gz' -exec cp {} out/ \;
           ls -lh out/
 
-      # Stable asset names → each publish overwrites in place; no stale pileup.
       - name: Publish to continuous release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: continuous
           name: Continuous base build
           body: |
-            Rolling from-source base (the fbsdglue set), refreshed on every
+            Rolling from-source base (full buildworld), refreshed on every
             successful `main` build. Consumed by nextbsd
             (`nextbsd-base-<arch>.tar.gz`).
 
@@ -243,11 +174,6 @@ jobs:
           files: |
             out/*.tar.gz
 
-      # Cascade to the nextbsd ISO only on a real upstream change
-      # (repository_dispatch, i.e. the releng->toolchain->compat chain), and
-      # only after continuous is refreshed above. A manual/patch main build
-      # refreshes continuous but does NOT kick the ISO — matches how the kernel
-      # repo gates its modules cascade.
       - name: Trigger downstream nextbsd ISO build
         if: github.event_name == 'repository_dispatch'
         env:

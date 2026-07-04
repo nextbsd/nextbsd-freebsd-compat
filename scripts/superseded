@@ -1,0 +1,25 @@
+# Superseded base tools (enforced by strip-superseded.sh).
+#
+# FreeBSD base tools NextBSD replaces with its own implementation. NOT path
+# collisions with the overlay — just dead/conflicting weight, so the base drops
+# them. Each path is existence-asserted at build time: a stale entry (base no
+# longer ships it) fails the build so this list stays honest.
+#
+# Verified 2026-07-03: all present on stock FreeBSD 15.0-p9, and absent+unused on
+# the running NextBSD box (launchd is PID 1; kextd/IOKit drive module load +
+# device attach; no kld/devd refs in loader.conf/rc.conf).
+
+/sbin/init                # launchd is PID 1
+/sbin/kldload             # kextload + kextd
+/sbin/kldstat             # kextstat
+/sbin/kldunload           # kextunload
+/sbin/kldconfig           # kextd search-path config
+/sbin/devd                # IOKit device attach via kextd
+/sbin/devmatch            # IOKit device matching
+/usr/sbin/bsdconfig       # nextbsd-installer
+/usr/sbin/bsdinstall      # nextbsd-installer
+/usr/sbin/freebsd-update  # base rolls via pkg (NextBSD-* packages)
+
+# CANDIDATE — held out until confirmed the NextBSD kernel package ships or
+# regenerates /boot/kernel/linker.hints (kldxref builds it). Re-enable then.
+# /usr/sbin/kldxref
