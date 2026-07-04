@@ -20,6 +20,19 @@
 /usr/sbin/bsdinstall      # nextbsd-installer
 /usr/sbin/freebsd-update  # base rolls via pkg (NextBSD-* packages)
 
+# BlocksRuntime SHADOW (library, not a tool; NOT an exact-path collision, so the
+# collision guard misses it). FreeBSD ships libBlocksRuntime in /usr/lib; Apple
+# ships the canonical one in /usr/lib/system. rtld searches /usr/lib BEFORE
+# /usr/lib/system, so the base copy shadows Apple's and breaks ObjC at runtime:
+# libobjc2's DT_NEEDED "libBlocksRuntime.so" binds to the base copy, which lacks
+# _Block_use_RR2 (an Apple/libdispatch symbol). Symptom: gnustep-base configure
+# "checking whether objc really works... no" (Undefined symbol _Block_use_RR2).
+# Apple's /usr/lib/system copy wins — strip the base ones. (Audited 2026-07-04:
+# BlocksRuntime is the ONLY such shadow across Apple's /usr/lib/system set.)
+/usr/lib/libBlocksRuntime.so
+/usr/lib/libBlocksRuntime.so.0
+/usr/lib/libBlocksRuntime.a
+
 # CANDIDATE — held out until confirmed the NextBSD kernel package ships or
 # regenerates /boot/kernel/linker.hints (kldxref builds it). Re-enable then.
 # /usr/sbin/kldxref
