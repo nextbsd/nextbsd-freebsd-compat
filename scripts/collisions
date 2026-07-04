@@ -1,0 +1,12 @@
+# Base<->userland collision allowlist (enforced by strip-collisions.sh).
+#
+# Every path here is shipped by BOTH the FreeBSD buildworld base AND the
+# NextBSD-userland (Apple/Darwin) overlay. The overlay owns the canonical copy,
+# so the base strips it. Any base<->userland overlap NOT listed here fails the
+# build — add new ones deliberately (with a reason) or stop shipping them.
+#
+# Derived by intersecting a stock FreeBSD 15.0-p9 base against NextBSD-userland's
+# 565-file plist (2026-07-03): exactly these 3.
+/usr/sbin/syslogd            # Apple ASL syslogd (wired to com.apple.syslogd.plist)
+/usr/include/Block.h         # Apple Blocks header (matches libdispatch/CF ABI)
+/usr/include/Block_private.h # Apple private Blocks header
