@@ -565,3 +565,21 @@ share/numericdef_unicode
 share/msgdef
 share/msgdef_unicode
 share/timedef
+
+# === build/admin utilities missing from the curated base ===
+# Same FreeBSD-utilities curation gap as the locale data: the earlier utilities
+# tranche didn't include these, and they broke the gershwin `make install`.
+# Most load-bearing: diff — autoconf's AC_PROG_SED length-check shells out to
+# diff(1) for every sed candidate; with no diff on PATH each candidate "breaks"
+# and configure dies with the MISLEADING "no acceptable sed could be found in
+# $PATH" (sed itself is fine). m4 + patch are needed by autoconf/build;
+# usr.bin/xinstall provides install(1) (PACKAGE=runtime) for `make install`;
+# usr.bin/ncurses builds tput/clear/tset/reset/tic/infocmp/toe/tabs; top is a
+# basic admin tool. All are FreeBSD-utilities (default PACKAGE) except install.
+usr.bin/diff
+usr.bin/diff3
+usr.bin/m4
+usr.bin/patch
+usr.bin/xinstall
+usr.bin/top
+usr.bin/ncurses
