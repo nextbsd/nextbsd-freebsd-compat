@@ -16,13 +16,29 @@ on:
 
 env:
   FREEBSD_BRANCH: releng/15.1
-  # Full FreeBSD world, EXTERNAL ports-llvm19 toolchain via --cross-bindir: NO base
-  # compiler is built or installed (WITHOUT_TOOLCHAIN gates cross-tools clang/lld
-  # off; the external clang compiles the world). No tests/lib32/man/debug in the
-  # base. krb5 is explicitly enabled — FreeBSD 15 defaults MK_KERBEROS=no, but the
-  # consumer needs libkrb5/GSSAPI (sshd GSSAPI, curl/git).
+  # Full FreeBSD world, compiled by the EXTERNAL ports-llvm19 toolchain via
+  # --cross-bindir. The base SHIPS its own clang/lld like a full FreeBSD base:
+  # WITHOUT_TOOLCHAIN is intentionally NOT set (MK_TOOLCHAIN defaults to yes), so
+  # /usr/bin/{cc,clang,clang++,cpp} + ld.lld are built (by the external compiler)
+  # and installed. NOTE: WITHOUT_TOOLCHAIN=yes force-clobbers MK_CLANG/MK_LLD with
+  # ':=' in src.opts.mk, so it can't coexist with a shipped compiler — it must be
+  # absent, and the parts we DON'T want are dropped individually below:
+  #   - WITHOUT_LLDB: no debugger (the single biggest toolchain component)
+  #   - WITHOUT_LLVM_TARGET_ALL + WITH_LLVM_TARGET_{AARCH64,X86}: base clang keeps
+  #     only the two backends NextBSD ships (both arches, so it cross-targets),
+  #     not all ~15 — big size/time win. (World itself is built by the external
+  #     compiler, so this only trims the INSTALLED clang, never the world build.)
+  # No tests/lib32/man/debug in the base. krb5 is explicitly enabled — FreeBSD 15
+  # defaults MK_KERBEROS=no, but the consumer needs libkrb5/GSSAPI (sshd GSSAPI,
+  # curl/git).
+  #
+  # base clang is the heaviest compile in buildworld (per arch). To revert to a
+  # compiler-less base, re-add WITHOUT_TOOLCHAIN=yes and drop the WITHOUT_LLDB /
+  # LLVM_TARGET lines.
   WORLD_FLAGS: >-
-    WITHOUT_TOOLCHAIN=yes WITHOUT_TESTS=yes WITHOUT_LIB32=yes WITHOUT_MAN=yes
+    WITHOUT_LLDB=yes WITHOUT_LLVM_TARGET_ALL=yes
+    WITH_LLVM_TARGET_AARCH64=yes WITH_LLVM_TARGET_X86=yes
+    WITHOUT_TESTS=yes WITHOUT_LIB32=yes WITHOUT_MAN=yes
     WITHOUT_DEBUG_FILES=yes MK_KERBEROS=yes MK_KERBEROS_SUPPORT=yes
     MK_MITKRB5=yes MK_GSSAPI=yes
 
