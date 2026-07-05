@@ -17,19 +17,16 @@ A full **`buildworld`** (`.github/workflows/build.yml`), cross-built for both
 `amd64` and `arm64` on an x86 runner inside the per-arch
 [`nextbsd-kernel-toolchain`](https://github.com/nextbsd-redux/nextbsd-kernel-toolchain)
 container. The world is compiled by an **external ports-llvm19** compiler passed
-via `--cross-bindir`; the base then ships **its own** clang/lld, built by that
-external compiler (see [Toolchain](#toolchain)).
+via `--cross-bindir`; the base itself ships **no** compiler (see
+[Toolchain](#toolchain)).
 
 `WORLD_FLAGS` trims the world down to what NextBSD ships:
 
 | flag | effect |
 |---|---|
-| *(no `WITHOUT_TOOLCHAIN`)* | base **ships** clang/lld — `MK_TOOLCHAIN` defaults to yes |
-| `WITHOUT_LLDB=yes` | drop the debugger (biggest toolchain component) |
-| `WITHOUT_LLVM_TARGET_ALL=yes` + `WITH_LLVM_TARGET_{AARCH64,X86}=yes` | base clang keeps only the two backends NextBSD ships (cross-targets both arches), not all ~15 |
+| `WITHOUT_TOOLCHAIN=yes` | no base compiler — `cc`/`clang`/`ld.lld` are not built or installed (the external ports-llvm19 clang compiles the world; consumers get clang from ports) |
 | `WITHOUT_TESTS=yes` | no `/usr/tests` |
 | `WITHOUT_LIB32=yes` | 64-bit only |
-| `WITHOUT_MAN=yes` | no man pages |
 | `WITHOUT_DEBUG_FILES=yes` | no split `.debug` |
 | `MK_KERBEROS=yes` + krb5/GSSAPI knobs | re-enabled (FreeBSD 15 defaults `MK_KERBEROS=no`); the consumer needs libkrb5/GSSAPI for sshd, curl, git |
 
@@ -87,20 +84,21 @@ re-applied from the `METALOG` before packing.
 
 ## Toolchain
 
-The base ships its own compiler, like a full FreeBSD base:
-`/usr/bin/{cc,clang,clang++,cpp}` and `ld.lld`. `WITHOUT_TOOLCHAIN` is
-deliberately **not** set (it would `:=`-clobber `MK_CLANG`/`MK_LLD`), so the
-default `MK_TOOLCHAIN=yes` builds the installed compiler — compiled by the
-external ports-llvm19 toolchain during the world build. It's trimmed for size:
-`WITHOUT_LLDB=yes` drops the debugger, and `WITHOUT_LLVM_TARGET_ALL` +
-`WITH_LLVM_TARGET_{AARCH64,X86}` keep only the two backends NextBSD ships (so the
-base clang still cross-targets both arches). The LLVM/clang version is whatever
-`releng/15.1`'s `contrib/llvm-project` carries.
+The base ships **no** compiler. `WITHOUT_TOOLCHAIN=yes` gates the cross-tools
+clang/lld off, so `/usr/bin/{cc,clang,clang++,cpp}` and `ld.lld` are neither
+built nor installed. The world is still compiled — by the **external**
+ports-llvm19 toolchain passed via `--cross-bindir` — but nothing from that
+compiler lands in the base.
 
-base clang is the single heaviest compile in `buildworld`, per arch — this is
-the main CI cost of the base build. To revert to a compiler-less base, re-add
-`WITHOUT_TOOLCHAIN=yes` and drop the `WITHOUT_LLDB`/`LLVM_TARGET` lines. If
-`nextbsd-userland` ever starts shipping its own `clang`/`cc`, the self-policing
+This is deliberate. Gershwin and the other consumers pull `clang` from **ports**
+for their own build dependency, so a base compiler would never get used — it only
+bloats the ISO and, as the single heaviest compile in `buildworld` (per arch),
+dominated the CI cost: shipping base clang/lld pushed the base build from ~20
+minutes to ~1h51m for zero downstream benefit. The LLVM/clang version, when the
+external toolchain is bumped, is whatever `releng/15.1`'s `contrib/llvm-project`
+carries.
+
+If `nextbsd-userland` ever starts shipping its own `clang`/`cc`, the self-policing
 `strip-collisions.sh` will fail the build until a `scripts/collisions` entry
 records who wins.
 
