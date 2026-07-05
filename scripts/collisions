@@ -5,8 +5,17 @@
 # so the base strips it. Any base<->userland overlap NOT listed here fails the
 # build — add new ones deliberately (with a reason) or stop shipping them.
 #
-# Derived by intersecting a stock FreeBSD 15.0-p9 base against NextBSD-userland's
-# 565-file plist (2026-07-03): exactly these 3.
-/usr/sbin/syslogd            # Apple ASL syslogd (wired to com.apple.syslogd.plist)
-/usr/include/Block.h         # Apple Blocks header (matches libdispatch/CF ABI)
-/usr/include/Block_private.h # Apple private Blocks header
+# Originally derived by intersecting a stock FreeBSD 15.0-p9 base against
+# NextBSD-userland's 565-file plist (2026-07-03): the first 3 below. The syslog
+# man pages were added 2026-07-05 after the base dropped WITHOUT_MAN=yes
+# (nextbsd-freebsd-compat e58e0f2 "ship man pages") — the full-buildworld base
+# now installs FreeBSD's syslog(3)/syslog.conf(5)/syslogd(8) pages, which the
+# Apple ASL overlay also ships. syslogd is already overlay-owned (below), so its
+# whole man-page family follows the daemon: the overlay owns them, base strips.
+/usr/sbin/syslogd                     # Apple ASL syslogd (wired to com.apple.syslogd.plist)
+/usr/include/Block.h                  # Apple Blocks header (matches libdispatch/CF ABI)
+/usr/include/Block_private.h          # Apple private Blocks header
+/usr/share/man/man1/syslog.1.gz       # Apple syslog(1) CLI (no base equivalent; overlay-owned)
+/usr/share/man/man3/syslog.3.gz       # Apple ASL syslog(3) — libsystem_asl owns the API
+/usr/share/man/man5/syslog.conf.5.gz  # Apple ASL syslog.conf(5)
+/usr/share/man/man8/syslogd.8.gz      # Apple ASL syslogd(8) — matches /usr/sbin/syslogd above
