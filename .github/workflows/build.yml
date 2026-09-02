@@ -46,7 +46,7 @@ jobs:
       # Per-arch toolchain image (the same one the kernel/modules builds use).
       # Both arches cross-build on the x86_64 runner — clang cross-compiles, no
       # emulation. The toolchain repo publishes both amd64-* and arm64-* tags.
-      image: ghcr.io/nextbsd-redux/nextbsd-kernel-toolchain:${{ matrix.target }}-${{ (github.event.client_payload.fbsd_sha || inputs.fbsd_sha) && format('fbsd-{0}', github.event.client_payload.fbsd_sha || inputs.fbsd_sha) || 'latest' }}
+      image: ghcr.io/nextbsd/nextbsd-kernel-toolchain:${{ matrix.target }}-${{ (github.event.client_payload.fbsd_sha || inputs.fbsd_sha) && format('fbsd-{0}', github.event.client_payload.fbsd_sha || inputs.fbsd_sha) || 'latest' }}
     steps:
       - uses: actions/checkout@v4
 
