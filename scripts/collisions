@@ -19,3 +19,24 @@
 /usr/share/man/man3/syslog.3.gz       # Apple ASL syslog(3) — libsystem_asl owns the API
 /usr/share/man/man5/syslog.conf.5.gz  # Apple ASL syslog.conf(5)
 /usr/share/man/man8/syslogd.8.gz      # Apple ASL syslogd(8) — matches /usr/sbin/syslogd above
+# Account tools (E18 U9, nextbsd/nextbsd-userland#255, added 2026-09-22): the
+# userland ships NextBSD's passwd, adduser and rmuser (and their man pages) at
+# FreeBSD's paths; they route directory users to the plists and root and the
+# system users to master.passwd. FreeBSD's pw and chpass are not collisions:
+# relocate-bsd.sh moves them to /usr/libexec/bsd first, and the wrappers exec
+# them there. These entries take effect once the userland publishes the tools.
+/usr/bin/passwd                       # NextBSD passwd(1), setuid; plists or master.passwd
+/usr/bin/yppasswd                     # link to it (says NIS is not supported)
+/usr/sbin/adduser                     # NextBSD adduser(8), drives dscli
+/usr/sbin/rmuser                      # NextBSD rmuser(8), drives dscli
+/usr/share/man/man1/passwd.1.gz       # NextBSD passwd(1)
+/usr/share/man/man1/yppasswd.1.gz     # link
+/usr/share/man/man1/chpass.1.gz       # NextBSD chpass(1) — the binary is relocated, its page is replaced
+/usr/share/man/man1/chfn.1.gz         # link
+/usr/share/man/man1/chsh.1.gz         # link
+/usr/share/man/man1/ypchpass.1.gz     # link
+/usr/share/man/man1/ypchfn.1.gz       # link
+/usr/share/man/man1/ypchsh.1.gz       # link
+/usr/share/man/man8/pw.8.gz           # NextBSD pw(8) — the binary is relocated, its page is replaced
+/usr/share/man/man8/adduser.8.gz      # NextBSD adduser(8)
+/usr/share/man/man8/rmuser.8.gz       # NextBSD rmuser(8)

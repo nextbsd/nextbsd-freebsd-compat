@@ -95,6 +95,14 @@ jobs:
       - name: Strip superseded base tools
         run: STAGE=/stage bash "$GITHUB_WORKSPACE/scripts/strip-superseded.sh"
 
+      # Keep the FreeBSD account tools NextBSD wraps (pw, chpass and its links)
+      # under /usr/libexec/bsd, where the wrappers from nextbsd-userland exec
+      # them for root, the system users and /etc/group (E18 U9). Before the
+      # collision strip, so the moved originals never share a path with the
+      # wrappers. Modes (chpass setuid) are set here; METALOG cannot.
+      - name: Relocate wrapped base tools to /usr/libexec/bsd
+        run: STAGE=/stage bash "$GITHUB_WORKSPACE/scripts/relocate-bsd.sh"
+
       # Remove every path NextBSD-userland (Apple/Darwin overlay) also ships, so
       # the overlay owns the canonical copy (pkg forbids two owners). Self-policing:
       # any base<->userland overlap NOT in scripts/collisions FAILS the build.

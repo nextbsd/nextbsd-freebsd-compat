@@ -1,0 +1,32 @@
+# Base tools kept for NextBSD's wrappers (enforced by relocate-bsd.sh).
+#
+# NextBSD replaces FreeBSD's account tools at their usual paths with wrappers
+# from nextbsd-userland (src/dscli: passwd, chpass, pw, adduser, rmuser) that
+# route a proper user to the DirectoryServices plists and root, the system
+# users and /etc/group to master.passwd and group. For the second half the
+# wrappers exec FreeBSD's originals, so the base moves them here instead of
+# dropping them. Runs BEFORE strip-collisions.sh, so the moved paths never
+# collide with the wrappers' and the wrappers' links (chfn, chsh, ...) own
+# /usr/bin. E18 U9, nextbsd/nextbsd-userland#255.
+#
+# Directives, one per line:
+#   move SOURCE DEST MODE   move a file, then chmod MODE (the unprivileged
+#                            install cannot set setuid; METALOG will not see
+#                            the new path, so the mode is stated here)
+#   link DEST TARGET        symlink DEST -> TARGET (relative), replacing any
+#   drop PATH               remove a path (the old symlinks the wrappers replace)
+# Every move source and every drop path must exist: a stale entry fails the
+# build so this list stays honest.
+
+move /usr/sbin/pw      /usr/libexec/bsd/pw      0555
+move /usr/bin/chpass   /usr/libexec/bsd/chpass  4555
+link /usr/libexec/bsd/chfn      chpass
+link /usr/libexec/bsd/chsh      chpass
+link /usr/libexec/bsd/ypchpass  chpass
+link /usr/libexec/bsd/ypchfn    chpass
+link /usr/libexec/bsd/ypchsh    chpass
+drop /usr/bin/chfn
+drop /usr/bin/chsh
+drop /usr/bin/ypchpass
+drop /usr/bin/ypchfn
+drop /usr/bin/ypchsh
