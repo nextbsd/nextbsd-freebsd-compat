@@ -179,11 +179,16 @@ jobs:
           files: |
             out/*.tar.gz
 
-      - name: Trigger downstream nextbsd ISO build
+      - name: Trigger downstream builds (nextbsd ISO, nextbsd-contrib)
         if: github.event_name == 'repository_dispatch'
         env:
           GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
         run: |
           gh api repos/nextbsd-redux/nextbsd/dispatches \
+            -f event_type=base-updated \
+            -f "client_payload[fbsd_sha]=${{ github.event.client_payload.fbsd_sha || inputs.fbsd_sha }}"
+          # nextbsd-contrib links only against this base (sudo, zsh, pico), so a
+          # new base rebuilds it; its publish then dispatches nextbsd-pkg.
+          gh api repos/nextbsd/nextbsd-contrib/dispatches \
             -f event_type=base-updated \
             -f "client_payload[fbsd_sha]=${{ github.event.client_payload.fbsd_sha || inputs.fbsd_sha }}"
