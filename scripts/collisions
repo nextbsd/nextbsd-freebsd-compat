@@ -19,3 +19,33 @@
 /usr/share/man/man3/syslog.3.gz       # Apple ASL syslog(3) — libsystem_asl owns the API
 /usr/share/man/man5/syslog.conf.5.gz  # Apple ASL syslog.conf(5)
 /usr/share/man/man8/syslogd.8.gz      # Apple ASL syslogd(8) — matches /usr/sbin/syslogd above
+
+# Account tools (E18 U9/U14, nextbsd/nextbsd-userland#291). The userland ships
+# NextBSD's adduser, passwd, rmuser, chpass and pw at these paths. Each routes:
+# a directory account is handled in the DirectoryServices property lists, and a
+# system account in /etc/master.passwd by the FreeBSD pw and chpass, which the
+# userland vendors into its own binaries rather than exec'ing from a second
+# location. So the base copies here are simply replaced, not moved.
+#
+# These entries only take effect once the userland publishes each path, so this
+# file can land alongside that change rather than ahead of it.
+/usr/bin/passwd                       # NextBSD passwd(1), setuid; plists or master.passwd
+/usr/bin/chpass                       # NextBSD chpass(1), setuid; FreeBSD's is vendored inside it
+/usr/bin/chfn                         # link
+/usr/bin/chsh                         # link
+/usr/bin/ypchpass                     # link
+/usr/bin/ypchfn                       # link
+/usr/bin/ypchsh                       # link
+/usr/sbin/adduser                     # NextBSD adduser(8), over the plists
+/usr/sbin/rmuser                      # NextBSD rmuser(8), over the plists
+/usr/sbin/pw                          # NextBSD pw(8); FreeBSD's is vendored inside it
+/usr/share/man/man1/passwd.1.gz       # NextBSD passwd(1)
+/usr/share/man/man1/chpass.1.gz       # NextBSD chpass(1)
+/usr/share/man/man1/chfn.1.gz         # link
+/usr/share/man/man1/chsh.1.gz         # link
+/usr/share/man/man1/ypchpass.1.gz     # link
+/usr/share/man/man1/ypchfn.1.gz       # link
+/usr/share/man/man1/ypchsh.1.gz       # link
+/usr/share/man/man8/pw.8.gz           # NextBSD pw(8)
+/usr/share/man/man8/adduser.8.gz      # NextBSD adduser(8)
+/usr/share/man/man8/rmuser.8.gz       # NextBSD rmuser(8)
