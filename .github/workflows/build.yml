@@ -183,12 +183,18 @@ jobs:
         if: github.event_name == 'repository_dispatch'
         env:
           GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+          SHA: ${{ github.event.client_payload.fbsd_sha || inputs.fbsd_sha }}
         run: |
-          gh api repos/nextbsd-redux/nextbsd/dispatches \
-            -f event_type=base-updated \
-            -f "client_payload[fbsd_sha]=${{ github.event.client_payload.fbsd_sha || inputs.fbsd_sha }}"
-          # nextbsd-contrib links only against this base (sudo, zsh, pico), so a
-          # new base rebuilds it; its publish then dispatches nextbsd-pkg.
-          gh api repos/nextbsd/nextbsd-contrib/dispatches \
-            -f event_type=base-updated \
-            -f "client_payload[fbsd_sha]=${{ github.event.client_payload.fbsd_sha || inputs.fbsd_sha }}"
+          # The base artifact is already published by now, so a downstream
+          # repo we cannot reach must not mark this build failed. Each
+          # dispatch reports on its own and a miss becomes a warning.
+          for repo in nextbsd/nextbsd nextbsd/nextbsd-contrib; do
+            if gh api "repos/$repo/dispatches" \
+                 -f event_type=base-updated \
+                 -f "client_payload[fbsd_sha]=$SHA"; then
+              echo "dispatched base-updated to $repo"
+            else
+              echo "::warning::could not dispatch base-updated to $repo (DISPATCH_TOKEN may lack access); it will not rebuild against this base"
+            fi
+          done
+          exit 0
