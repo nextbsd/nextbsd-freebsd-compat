@@ -49,3 +49,14 @@
 /usr/share/man/man8/pw.8.gz           # NextBSD pw(8)
 /usr/share/man/man8/adduser.8.gz      # NextBSD adduser(8)
 /usr/share/man/man8/rmuser.8.gz       # NextBSD rmuser(8)
+
+# tzsetup (E18 U18, nextbsd/nextbsd-userland#302). The userland ships NextBSD's
+# own at the same path, in the installer's look, and with a checkbox that turns
+# on org.nextbsd.ntpd -- which the base one knows nothing about, since it
+# predates launchd here.
+#
+# Only the binary and its page are replaced. The zone data underneath is
+# FreeBSD's and stays: /usr/share/zoneinfo, including zone1970.tab and
+# iso3166.tab, which the new one reads exactly as the old one did.
+/usr/sbin/tzsetup                     # NextBSD tzsetup(8), in the installer's look
+/usr/share/man/man8/tzsetup.8.gz      # NextBSD tzsetup(8)
