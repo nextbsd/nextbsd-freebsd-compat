@@ -60,3 +60,13 @@
 # iso3166.tab, which the new one reads exactly as the old one did.
 /usr/sbin/tzsetup                     # NextBSD tzsetup(8), in the installer's look
 /usr/share/man/man8/tzsetup.8.gz      # NextBSD tzsetup(8)
+
+# service(8) (E2, nextbsd/nextbsd#281: retire rc.d). The userland ships a
+# launchd-native shim at this path: ldconfig runs the old rc.d/ldconfig command
+# directly, and <name> start|stop maps to launchctl start/stop on the matching
+# LaunchDaemon. Only the binary is replaced; the shim ships no man page.
+#
+# Like the entries above, this takes effect only once the userland publishes
+# the path. Until then the base keeps its service(8), which SERVICE-LDCONFIG
+# still needs.
+/usr/sbin/service                     # NextBSD service(8) shim over launchctl
