@@ -62,9 +62,11 @@ jobs:
           # hints file (covers setuid, which ignore LD_* / hints). make.conf so
           # CFLAGS+= APPENDS to rtld's Makefile flags (a make-cmdline CFLAGS+=
           # would drop rtld's own -I -> "debug.h not found"). Must precede buildworld.
+          # /usr/X11/lib (E23's base X11) comes before /usr/local/lib so FreeBSD
+          # programs load base's libX11/libGL, not a second copy from packages.
           printf '%s\n' \
             '.if ${.CURDIR:M*/libexec/rtld-elf}' \
-            'CFLAGS+= -DSTANDARD_LIBRARY_PATH=\"/lib:/usr/lib:/usr/lib/system:/System/Library/Libraries:/usr/local/lib\"' \
+            'CFLAGS+= -DSTANDARD_LIBRARY_PATH=\"/lib:/usr/lib:/usr/lib/system:/System/Library/Libraries:/usr/X11/lib:/usr/local/lib\"' \
             '.endif' >> /etc/make.conf
           ./tools/build/make.py --cross-bindir="${CROSS_BINDIR}" \
             TARGET=${{ matrix.target }} TARGET_ARCH=${{ matrix.target_arch }} ${WORLD_FLAGS} \

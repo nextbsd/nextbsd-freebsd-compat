@@ -31,10 +31,13 @@ via `--cross-bindir`; the base itself ships **no** compiler (see
 | `MK_KERBEROS=yes` + krb5/GSSAPI knobs | re-enabled (FreeBSD 15 defaults `MK_KERBEROS=no`); the consumer needs libkrb5/GSSAPI for sshd, curl, git |
 
 A `make.conf` shim bakes rtld's compiled-in default search path
-(`/lib:/usr/lib:/usr/lib/system:/System/Library/Libraries:/usr/local/lib`) so
+(`/lib:/usr/lib:/usr/lib/system:/System/Library/Libraries:/usr/X11/lib:/usr/local/lib`) so
 setuid ports/pkg binaries and the GNUstep daemons resolve libraries with no
-hints file. Install is `installworld` into `/stage` (never `make distribution`,
-so the base carries **no** `/etc` or `/var` content).
+hints file. `/usr/X11/lib`, base's X11 stack, sits before `/usr/local/lib` so
+programs built for FreeBSD load base's `libX11.so.6` and `libGL.so.1` rather
+than a copy from packages; a missing directory is skipped. Install is
+`installworld` into `/stage` (never `make distribution`, so the base carries
+**no** `/etc` or `/var` content).
 
 ## What it strips (and why) — all in this repo
 
