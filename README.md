@@ -45,7 +45,7 @@ The base is stripped **here**, before the artifact is published — not downstre
 ### 1. Superseded base tools — `scripts/strip-superseded.sh` (list: `scripts/superseded`)
 
 FreeBSD base tools NextBSD replaces with a Darwin equivalent from
-`nextbsd-userland`. These are **not** path collisions — they are distinct tools
+`nextbsd-userland` (or, for printing, `nextbsd-printing-support`). These are **not** path collisions — they are distinct tools
 that would be dead/conflicting weight, so the base drops them:
 
 | stripped from base | replaced by (in `nextbsd-userland`) |
@@ -55,6 +55,7 @@ that would be dead/conflicting weight, so the base drops them:
 | `/sbin/devd` `/sbin/devmatch` | `kextd` + libIOKit (IOKit device attach/matching) |
 | `/usr/sbin/bsdconfig` `/usr/sbin/bsdinstall` | `nextbsd-installer` |
 | `/usr/sbin/freebsd-update` | `pkg` (`NextBSD-*` packages via `nextbsd-pkg`) |
+| the BSD LPD print system: `lp` `lpr` `lpq` `lprm` `lpc` `lpd` `chkprintcap` `pac` `lptest`, `/usr/libexec/lpr`, their man pages, `printcap(5)`, `hosts.lpd(5)` | Apple's CUPS (`cupsd`, its `lp`/`lpr`/`lpq`/`lprm`/`lpc`) in [`nextbsd-printing-support`](https://github.com/nextbsd/nextbsd-printing-support) |
 | `libBlocksRuntime.so{,.0}` / `.a` (`/usr/lib`) | Apple's canonical copy in `/usr/lib/system` (base copy shadows it and breaks ObjC — missing `_Block_use_RR2`) |
 
 Every listed path is existence-asserted: a stale entry (base stopped shipping

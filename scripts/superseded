@@ -20,6 +20,36 @@
 /usr/sbin/bsdinstall      # nextbsd-installer
 /usr/sbin/freebsd-update  # base rolls via pkg (NextBSD-* packages)
 
+# The BSD LPD print system: CUPS replaces it, as on macOS, which ships no lpd
+# (Apple's CUPS 2.3.4 in nextbsd-printing-support, E24 D5,
+# nextbsd/nextbsd-printing-support#1). CUPS installs its own lp, lpr, lpq, lprm
+# and lpc at these paths, so the base copies would collide in the image and in
+# pkg; the rest of the suite (lpd, its accounting, checking and filter tools,
+# printcap(5), hosts.lpd(5)) only works with lpd. lpr, lpq and lprm are setuid
+# root in the base, one more reason not to keep an unused copy. lp(4), the
+# parallel-port driver page, is not part of this and stays.
+/usr/bin/lp                         # CUPS lp(1)
+/usr/bin/lpr                        # CUPS lpr(1)
+/usr/bin/lpq                        # CUPS lpq(1)
+/usr/bin/lprm                       # CUPS lprm(1)
+/usr/sbin/lpc                       # CUPS lpc(8)
+/usr/sbin/lpd                       # cupsd (org.nextbsd.cupsd); cups-lpd serves LPD clients
+/usr/sbin/chkprintcap               # lpd's printcap checker
+/usr/sbin/pac                       # lpd's accounting
+/usr/sbin/lptest                    # lpd's test-pattern generator
+/usr/libexec/lpr                    # lpd's filters (lpf, ru/)
+/usr/share/man/man1/lp.1.gz         # CUPS ships lp.1
+/usr/share/man/man1/lpr.1.gz        # CUPS ships lpr.1
+/usr/share/man/man1/lpq.1.gz        # CUPS ships lpq.1
+/usr/share/man/man1/lprm.1.gz       # CUPS ships lprm.1
+/usr/share/man/man1/lptest.1.gz
+/usr/share/man/man8/lpc.8.gz        # CUPS ships lpc.8
+/usr/share/man/man8/lpd.8.gz
+/usr/share/man/man8/pac.8.gz
+/usr/share/man/man8/chkprintcap.8.gz
+/usr/share/man/man5/printcap.5.gz
+/usr/share/man/man5/hosts.lpd.5.gz
+
 # BlocksRuntime SHADOW (library, not a tool; NOT an exact-path collision, so the
 # collision guard misses it). FreeBSD ships libBlocksRuntime in /usr/lib; Apple
 # ships the canonical one in /usr/lib/system. rtld searches /usr/lib BEFORE
