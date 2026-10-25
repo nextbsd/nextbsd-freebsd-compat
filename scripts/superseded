@@ -50,6 +50,17 @@
 /usr/share/man/man5/printcap.5.gz
 /usr/share/man/man5/hosts.lpd.5.gz
 
+# FreeBSD's pkg(7) bootstrap: NextBSD ships the real pkg(8) in base, built from
+# freebsd/pkg 2.8.4 with NextBSD's patches in nextbsd-contrib
+# (nextbsd/nextbsd-contrib#7; design: nextbsd-pkg wiki, "pkg comes only from
+# the NextBSD repo"). It installs /usr/sbin/pkg at the shim's path. The shim
+# exists only to fetch pkg from pkg.FreeBSD.org; its man page and the key it
+# verifies that download with go with it. /usr/share/pkg/triggers/mandoc.ucl
+# stays: it is mandoc's trigger, which the real pkg runs.
+/usr/sbin/pkg                                         # pkg(8) from nextbsd-contrib
+/usr/share/man/man7/pkg.7.gz                          # the bootstrap's page; pkg(8) has its own
+/usr/share/keys/pkg/trusted/pkg.freebsd.org.2013102301  # the bootstrap's pkg.FreeBSD.org key
+
 # BlocksRuntime SHADOW (library, not a tool; NOT an exact-path collision, so the
 # collision guard misses it). FreeBSD ships libBlocksRuntime in /usr/lib; Apple
 # ships the canonical one in /usr/lib/system. rtld searches /usr/lib BEFORE

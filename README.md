@@ -48,7 +48,8 @@ The base is stripped **here**, before the artifact is published — not downstre
 ### 1. Superseded base tools — `scripts/strip-superseded.sh` (list: `scripts/superseded`)
 
 FreeBSD base tools NextBSD replaces with a Darwin equivalent from
-`nextbsd-userland` (or, for printing, `nextbsd-printing-support`). These are **not** path collisions — they are distinct tools
+`nextbsd-userland` (or, for printing, `nextbsd-printing-support`; for pkg,
+`nextbsd-contrib`). These are **not** path collisions — they are distinct tools
 that would be dead/conflicting weight, so the base drops them:
 
 | stripped from base | replaced by (in `nextbsd-userland`) |
@@ -59,6 +60,7 @@ that would be dead/conflicting weight, so the base drops them:
 | `/usr/sbin/bsdconfig` `/usr/sbin/bsdinstall` | `nextbsd-installer` |
 | `/usr/sbin/freebsd-update` | `pkg` (`NextBSD-*` packages via `nextbsd-pkg`) |
 | the BSD LPD print system: `lp` `lpr` `lpq` `lprm` `lpc` `lpd` `chkprintcap` `pac` `lptest`, `/usr/libexec/lpr`, their man pages, `printcap(5)`, `hosts.lpd(5)` | Apple's CUPS (`cupsd`, its `lp`/`lpr`/`lpq`/`lprm`/`lpc`) in [`nextbsd-printing-support`](https://github.com/nextbsd/nextbsd-printing-support) |
+| FreeBSD's pkg(7) bootstrap: `/usr/sbin/pkg`, `pkg.7`, its `pkg.freebsd.org` key in `/usr/share/keys/pkg/trusted/` | the real pkg(8) in base (`/usr/sbin/pkg`), from [`nextbsd-contrib`](https://github.com/nextbsd/nextbsd-contrib) (`src/pkg`) |
 | `libBlocksRuntime.so{,.0}` / `.a` (`/usr/lib`) | Apple's canonical copy in `/usr/lib/system` (base copy shadows it and breaks ObjC — missing `_Block_use_RR2`) |
 
 Every listed path is existence-asserted: a stale entry (base stopped shipping
