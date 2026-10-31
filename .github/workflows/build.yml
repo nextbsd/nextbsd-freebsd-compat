@@ -25,11 +25,15 @@ env:
   # the man utilities (man/whatis/apropos/makewhatis) build by default via
   # MK_MAN_UTILS. No tests/lib32/debug in the base. krb5 is explicitly enabled —
   # FreeBSD 15 defaults MK_KERBEROS=no, but the consumer needs libkrb5/GSSAPI (sshd
-  # GSSAPI, curl/git).
+  # GSSAPI, curl/git). WITHOUT_SOURCELESS_UCODE=yes keeps share/firmwares out of
+  # the world: it would install FreeBSD's iwm(4) blobs into /boot/firmware
+  # (~13.8 MiB). NextBSD has no iwm driver; Intel WiFi firmware ships inside
+  # IntelIwlwifi.kext (nextbsd/nextbsd#392). In world this knob gates only
+  # share/Makefile -> share/firmwares; its other users are kernel modules.
   WORLD_FLAGS: >-
     WITHOUT_TOOLCHAIN=yes WITHOUT_TESTS=yes WITHOUT_LIB32=yes
     WITHOUT_DEBUG_FILES=yes MK_KERBEROS=yes MK_KERBEROS_SUPPORT=yes
-    MK_MITKRB5=yes MK_GSSAPI=yes
+    MK_MITKRB5=yes MK_GSSAPI=yes WITHOUT_SOURCELESS_UCODE=yes
 
 jobs:
   base:
@@ -130,6 +134,13 @@ jobs:
           rm -rf "$STAGE"/boot/kernel
           if [ -e "$STAGE/etc" ] || [ -e "$STAGE/var" ]; then
             echo "::error::/etc or /var still present after strip — nextbsd must own these"; exit 1
+          fi
+          # GUARD: no firmware blobs in the base (nextbsd/nextbsd#392). The empty
+          # /boot/firmware directory comes from mtree (BSD.root.dist) and stays;
+          # any file in it means share/firmwares came back into the world.
+          if [ -n "$(find "$STAGE/boot/firmware" -type f 2>/dev/null)" ]; then
+            echo "::error::/boot/firmware has files — WITHOUT_SOURCELESS_UCODE not in effect?"
+            find "$STAGE/boot/firmware" -type f; exit 1
           fi
           echo "=== final base tree (top levels) ==="; find "$STAGE" -maxdepth 2 -type d | sort
           tar -C "$STAGE" -czf /tmp/nextbsd-base-${{ matrix.target }}.tar.gz .
