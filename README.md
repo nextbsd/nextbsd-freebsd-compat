@@ -30,6 +30,16 @@ via `--cross-bindir`; the base itself ships **no** compiler (see
 | `WITHOUT_DEBUG_FILES=yes` | no split `.debug` |
 | `MK_KERBEROS=yes` + krb5/GSSAPI knobs | re-enabled (FreeBSD 15 defaults `MK_KERBEROS=no`); the consumer needs libkrb5/GSSAPI for sshd, curl, git |
 
+Before buildworld, the NextBSD source patches in [`patches/`](patches/) are
+applied to the image's `/usr/src` with `git apply`, in the order listed in
+[`patches/series`](patches/series) (the same layout as `nextbsd-kernel`). The
+step logs each patch and fails the build if one does not apply. The current
+series keeps the releng/15.1 code paths that upstream gates on
+`__FreeBSD_version` 16.x values, and makes `crtbrand`'s ELF ABI note follow
+`sys/sys/param.h` again, so world builds correctly once NextBSD sets
+`__FreeBSD_version` to 2700000 (nextbsd/nextbsd-kernel#376). See
+[`patches/README.md`](patches/README.md).
+
 A `make.conf` shim bakes rtld's compiled-in default search path
 (`/lib:/usr/lib:/usr/lib/system:/System/Library/Libraries:/usr/X11/lib:/usr/local/lib`) so
 setuid ports/pkg binaries and the GNUstep daemons resolve libraries with no
@@ -112,7 +122,7 @@ records who wins.
 
 ```
 nextbsd-toolchain (fbsd sha) ──toolchain-updated──▶ THIS REPO
-  buildworld ▶ installworld ▶ strip (superseded, collisions, skeleton)
+  patches ▶ buildworld ▶ installworld ▶ strip (superseded, collisions, skeleton)
   ▶ nextbsd-base-<arch>.tar.gz ─▶ continuous release
         │
         ├─▶ nextbsd-pkg   (repackages verbatim → NextBSD-freebsd-compat pkg)

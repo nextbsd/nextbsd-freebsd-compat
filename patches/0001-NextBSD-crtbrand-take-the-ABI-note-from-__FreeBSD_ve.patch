@@ -1,0 +1,36 @@
+From d0a349c6a0ecb28ac5e12a4946fb32f29a58f2e4 Mon Sep 17 00:00:00 2001
+From: pkgdemon <jpm820@gmail.com>
+Date: Sat, 31 Oct 2026 17:49:46 -0500
+Subject: [PATCH] NextBSD: crtbrand: take the ABI note from __FreeBSD_version
+ again
+
+releng/15.1 commit 96841ea08d ("Set a static __FreeBSD_version")
+hard-coded the NT_FREEBSD_ABI_TAG note in lib/csu/common/crtbrand.S to
+`.4byte 1501000`. Put back `__FreeBSD_version`, as before 96841ea08d.
+crtbrand.S still includes <sys/param.h>, so nothing else is needed.
+
+Every binary's ELF ABI note then follows sys/sys/param.h. Today
+param.h says 1501000, so the note is unchanged; once NextBSD sets
+__FreeBSD_version to 2700000, the note reads 2700000.
+
+Refs nextbsd/nextbsd-kernel#376. Carried out-of-tree for NextBSD.
+---
+ lib/csu/common/crtbrand.S | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/lib/csu/common/crtbrand.S b/lib/csu/common/crtbrand.S
+index ae7a3369c..a06f72daa 100644
+--- a/lib/csu/common/crtbrand.S
++++ b/lib/csu/common/crtbrand.S
+@@ -43,7 +43,7 @@
+ 	.4byte		NT_FREEBSD_ABI_TAG
+ 1:	.asciz		NOTE_FREEBSD_VENDOR
+ 2:	.p2align	2
+-3:	.4byte		1501000
++3:	.4byte		__FreeBSD_version
+ 4:
+ 
+ 	.section .note.GNU-stack,"",%progbits
+-- 
+2.54.0 (Apple Git-157)
+

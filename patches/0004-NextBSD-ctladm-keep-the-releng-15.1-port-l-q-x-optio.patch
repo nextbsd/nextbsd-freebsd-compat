@@ -1,0 +1,79 @@
+From 690f4caa619b7e8487e3634742ecaa838aa9bdea Mon Sep 17 00:00:00 2001
+From: pkgdemon <jpm820@gmail.com>
+Date: Sat, 31 Oct 2026 17:49:47 -0500
+Subject: [PATCH] NextBSD: ctladm: keep the releng/15.1 port -l/-q/-x options
+
+ctladm.c gates `ctladm port -l/-q/-x` (deprecated in favour of
+`ctladm portlist`) on __FreeBSD_version < 1600000 in four places. Once
+NextBSD sets __FreeBSD_version to 2700000 they would silently go away
+while NextBSD is still the releng/15.1 tree.
+
+Keep the releng/15.1 code unconditionally. That is the code compiled
+at 1501000, so nothing changes today.
+
+Refs nextbsd/nextbsd-kernel#376. Carried out-of-tree for NextBSD.
+---
+ usr.sbin/ctladm/ctladm.c | 10 ----------
+ 1 file changed, 10 deletions(-)
+
+diff --git a/usr.sbin/ctladm/ctladm.c b/usr.sbin/ctladm/ctladm.c
+index d93334a67..6813ced00 100644
+--- a/usr.sbin/ctladm/ctladm.c
++++ b/usr.sbin/ctladm/ctladm.c
+@@ -184,11 +184,7 @@ static struct ctladm_opts option_table[] = {
+ 	{"modify", CTLADM_CMD_MODIFY, CTLADM_ARG_NONE, "b:l:o:s:"},
+ 	{"nvlist", CTLADM_CMD_NVLIST, CTLADM_ARG_NONE, "vx"},
+ 	{"nvterminate", CTLADM_CMD_NVTERMINATE, CTLADM_ARG_NONE, "ac:h:"},
+-#if (__FreeBSD_version < 1600000)
+ 	{"port", CTLADM_CMD_PORT, CTLADM_ARG_NONE, "lo:O:d:crp:qt:w:W:x"},
+-#else
+-	{"port", CTLADM_CMD_PORT, CTLADM_ARG_NONE, "o:O:d:crp:t:w:W:"},
+-#endif
+ 	{"portlist", CTLADM_CMD_PORTLIST, CTLADM_ARG_NONE, "f:ilp:qvx"},
+ 	{"prin", CTLADM_CMD_PRES_IN, CTLADM_ARG_NEED_TL, "a:"},
+ 	{"prout", CTLADM_CMD_PRES_OUT, CTLADM_ARG_NEED_TL, "a:k:r:s:"},
+@@ -414,9 +410,7 @@ cctl_port(int fd, int argc, char **argv, char *combinedopt)
+ 	char *driver = NULL;
+ 	nvlist_t *option_list;
+ 	ctl_port_type port_type = CTL_PORT_NONE;
+-#if (__FreeBSD_version < 1600000)
+ 	int quiet = 0, xml = 0;
+-#endif
+ 
+ 	option_list = nvlist_create(0);
+ 	if (option_list == NULL)
+@@ -424,7 +418,6 @@ cctl_port(int fd, int argc, char **argv, char *combinedopt)
+ 
+ 	while ((c = getopt(argc, argv, combinedopt)) != -1) {
+ 		switch (c) {
+-#if (__FreeBSD_version < 1600000)
+ 		case 'l':
+ 			warnx("ctladm port -l is deprecated.  "
+ 			    "Use ctladm portlist instead");
+@@ -439,7 +432,6 @@ cctl_port(int fd, int argc, char **argv, char *combinedopt)
+ 		case 'x':
+ 			xml = 1;
+ 			break;
+-#endif
+ 		case 'c':
+ 			port_mode = CCTL_PORT_MODE_CREATE;
+ 			break;
+@@ -573,7 +565,6 @@ cctl_port(int fd, int argc, char **argv, char *combinedopt)
+ 	entry.targ_port = targ_port;
+ 
+ 	switch (port_mode) {
+-#if (__FreeBSD_version < 1600000)
+ 	case CCTL_PORT_MODE_LIST: {
+ 		char opts[] = "xq";
+ 		char argx[] = "-x";
+@@ -590,7 +581,6 @@ cctl_port(int fd, int argc, char **argv, char *combinedopt)
+ 		cctl_portlist(fd, argcx, argvx, opts);
+ 		break;
+ 	}
+-#endif
+ 	case CCTL_PORT_MODE_REMOVE:
+ 	case CCTL_PORT_MODE_CREATE: {
+ 		bzero(&req, sizeof(req));
+-- 
+2.54.0 (Apple Git-157)
+
