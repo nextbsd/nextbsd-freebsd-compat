@@ -88,6 +88,20 @@ jobs:
             '.if ${.CURDIR:M*/libexec/rtld-elf}' \
             'CFLAGS+= -DSTANDARD_LIBRARY_PATH=\"/lib:/usr/lib:/usr/lib/system:/System/Library/Libraries:/usr/X11/lib:/usr/local/lib\"' \
             '.endif' >> /etc/make.conf
+          # NextBSD's __FreeBSD_version (nextbsd-kernel#376): 2700000 for the
+          # NextBSD 27.0.0 kernel, on the releng/15.1 API. Only this define;
+          # REVISION, BRANCH and newvers.sh stay as they are. It reaches
+          # <osreldate.h> and every binary's ELF ABI note (pkg reads /bin/sh's
+          # and /usr/bin/uname's). It must match the kernel's: kexts carry
+          # MODULE_KERNEL_MAXVER from it (sys/module.h). Must precede buildworld.
+          PARAM_H=sys/sys/param.h
+          FBSD_VER_RE='^#define[[:space:]]+__FreeBSD_version[[:space:]]+'
+          n=$(grep -Ec "${FBSD_VER_RE}[0-9]{7}([[:space:]]|$)" "$PARAM_H" || true)
+          [ "$n" = 1 ] || { echo "::error::$PARAM_H: expected one '#define __FreeBSD_version NNNNNNN', found $n"; exit 1; }
+          sed -i -E "s/(${FBSD_VER_RE})[0-9]{7}([[:space:]]|$)/\12700000\2/" "$PARAM_H"
+          grep -Eq "${FBSD_VER_RE}2700000([[:space:]]|$)" "$PARAM_H" \
+            || { echo "::error::$PARAM_H: __FreeBSD_version is not 2700000 after the edit"; exit 1; }
+          grep -En "${FBSD_VER_RE}" "$PARAM_H"
           ./tools/build/make.py --cross-bindir="${CROSS_BINDIR}" \
             TARGET=${{ matrix.target }} TARGET_ARCH=${{ matrix.target_arch }} ${WORLD_FLAGS} \
             -j"$(nproc)" buildworld
