@@ -1,0 +1,45 @@
+From f9f40022922606022da7a683ecb0c872253443ad Mon Sep 17 00:00:00 2001
+From: pkgdemon <jpm820@gmail.com>
+Date: Sat, 31 Oct 2026 17:49:47 -0500
+Subject: [PATCH] NextBSD: devd: keep the releng/15.1 system="kern" handling
+
+new_match() picks its handling of the deprecated system="kern" rule by
+__FreeBSD_version: a rewrite with a warning below 1500000, a fatal
+error below 1600000, and `#error "Remove this gross hack"` above.
+Once NextBSD sets __FreeBSD_version to 2700000, the #error breaks
+buildworld.
+
+Keep the releng/15.1 branch (the fatal error) unconditionally. That is
+the branch compiled at 1501000, so nothing changes today.
+
+Refs nextbsd/nextbsd-kernel#376. Carried out-of-tree for NextBSD.
+---
+ sbin/devd/devd.cc | 10 ----------
+ 1 file changed, 10 deletions(-)
+
+diff --git a/sbin/devd/devd.cc b/sbin/devd/devd.cc
+index 1ff405244..7f62a6255 100644
+--- a/sbin/devd/devd.cc
++++ b/sbin/devd/devd.cc
+@@ -1215,18 +1215,8 @@ new_match(const char *var, const char *re)
+ 	 * but make it a fatal error in 15.x and newer.
+ 	 */
+ 	if (strcmp(var, "kern") == 0) {
+-#if __FreeBSD_version < 1500000
+-		devdlog(LOG_WARNING,
+-		    "Changing deprecated system='kern' to new name 'kernel' in %s line %d.",
+-		    curr_cf, lineno);
+-		free(const_cast<char *>(var));
+-		var = strdup("kernel");
+-#elif  __FreeBSD_version < 1600000
+ 		errx(1, "Encountered deprecated system=\"kern\" rule in %s line %d",
+ 		    curr_cf, lineno);
+-#else
+-#error "Remove this gross hack"
+-#endif
+ 	}
+ 
+ 	eps *e = new match(cfg, var, re);
+-- 
+2.54.0 (Apple Git-157)
+

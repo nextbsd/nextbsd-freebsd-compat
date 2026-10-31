@@ -4,9 +4,9 @@ on:
     types: [toolchain-updated]
   pull_request:
     # Validate the from-source base build (both arches) on PRs touching the strip
-    # scripts or the workflow. PR runs never cascade — the downstream nextbsd ISO
+    # scripts, the source patches or the workflow. PR runs never cascade — the downstream nextbsd ISO
     # dispatch is gated on github.ref == 'refs/heads/main'.
-    paths: ['scripts/**', '.github/workflows/build.yml']
+    paths: ['scripts/**', 'patches/**', '.github/workflows/build.yml']
   workflow_dispatch:
     inputs:
       fbsd_sha:
@@ -53,6 +53,22 @@ jobs:
       image: ghcr.io/nextbsd/nextbsd-toolchain:${{ matrix.target }}-${{ (github.event.client_payload.fbsd_sha || inputs.fbsd_sha) && format('fbsd-{0}', github.event.client_payload.fbsd_sha || inputs.fbsd_sha) || 'latest' }}
     steps:
       - uses: actions/checkout@v4
+
+      # NextBSD world source patches (patches/series, patches/README.md), the
+      # same layout as nextbsd-kernel's. The image's /usr/src is a shallow git
+      # clone of nextbsd/freebsd-src, so git apply works on it. Each patch is
+      # logged; set -e stops the build on the first one that does not apply.
+      - name: Apply NextBSD source patches
+        run: |
+          set -eu
+          cd /usr/src
+          echo "/usr/src at $(git rev-parse HEAD 2>/dev/null || echo unknown)"
+          for p in $(cat "$GITHUB_WORKSPACE/patches/series"); do
+            echo "Applying $p"
+            git apply --verbose "$GITHUB_WORKSPACE/patches/$p" \
+              || { echo "::error::patch $p does not apply to /usr/src"; exit 1; }
+          done
+          git status --short
 
       # Full buildworld with the external ports-llvm19 compiler. buildworld runs
       # its own _bootstrap-tools/_legacy (host sh/awk/m4/yacc/mtree/makefs — not a
@@ -112,6 +128,10 @@ jobs:
           echo "=== libc / rtld present? ==="
           ls -l /stage/lib/libc.so* /stage/libexec/ld-elf.so.1 2>&1 || true
           echo "=== top-level dirs ==="; find /stage -maxdepth 2 -type d | sort
+          echo "=== /bin/sh ELF ABI note (__FreeBSD_version) ==="
+          "${CROSS_BINDIR}/llvm-readelf" -n /stage/bin/sh 2>&1 \
+            || readelf -n /stage/bin/sh 2>&1 || true
+          file /stage/bin/sh 2>&1 || true
 
       - name: Pack base artifact
         run: |

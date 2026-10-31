@@ -1,0 +1,36 @@
+From fde49fadc467c8f2a150e87b223fc6ae3cc3bc03 Mon Sep 17 00:00:00 2001
+From: pkgdemon <jpm820@gmail.com>
+Date: Sat, 31 Oct 2026 17:49:47 -0500
+Subject: [PATCH] NextBSD: efiio.h: keep the efi_*_ioc compat structures in
+ userland
+
+<sys/efiio.h> defines _WANT_EFI_IOC (efi_get_table_ioc,
+efi_waketime_ioc, ...) for userland only when
+__FreeBSD_version < 1600000. usr.sbin/efitable and usr.sbin/efiwake in
+releng/15.1 still use them, so once NextBSD sets __FreeBSD_version to
+2700000 they would no longer build.
+
+Change the test to `#if !defined(_KERNEL)`. At 1501000 the result is
+the same, so nothing changes today.
+
+Refs nextbsd/nextbsd-kernel#376. Carried out-of-tree for NextBSD.
+---
+ sys/sys/efiio.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/sys/sys/efiio.h b/sys/sys/efiio.h
+index e45b966b7..66e21976f 100644
+--- a/sys/sys/efiio.h
++++ b/sys/sys/efiio.h
+@@ -41,7 +41,7 @@
+  */
+ _Static_assert(sizeof(struct uuid) == sizeof(efi_guid_t),
+     "uuid_t and efi_guid_t are same bytes, but different elements");
+-#if __FreeBSD_version < 1600000 && !defined(_KERNEL)
++#if !defined(_KERNEL)
+ #define _WANT_EFI_IOC
+ #endif
+ 
+-- 
+2.54.0 (Apple Git-157)
+
