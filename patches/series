@@ -3,3 +3,4 @@
 0003-NextBSD-devd-keep-the-releng-15.1-system-kern-handli.patch
 0004-NextBSD-ctladm-keep-the-releng-15.1-port-l-q-x-optio.patch
 0005-NextBSD-efiio.h-keep-the-efi_-_ioc-compat-structures.patch
+0006-NextBSD-libzstd-install-as-public-libzstd.so.1-with-.patch
