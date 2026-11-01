@@ -1,0 +1,352 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pkgdemon <jpm820@gmail.com>
+Date: Sun, 1 Nov 2026 03:09:18 -0600
+Subject: [PATCH] NextBSD: dumpon(8)/savecore(8): kernel dumps to a regular
+ file
+
+NextBSD's kernel can write a crash dump to a preallocated regular file
+on UFS through the file's pinned extent map (nextbsd/nextbsd-kernel#216).
+dumpon(8) and savecore(8) only knew dump devices.
+
+- dumpon takes an absolute path that is not under /dev as a file: it
+  is opened as is, without a /dev/ prefix, and DIOCSKERNELDUMP on the
+  open file goes to the kernel's file dumper. A path that is neither a
+  character device nor a regular file is refused. The full-dump size
+  check uses the file size. On a kernel without the file dumper, the
+  ioctl reaches the filesystem and fails with ENOTTY; dumpon then says
+  the kernel cannot dump to a regular file. Other errors are reported
+  with err(3), so the kernel's extended error is printed too, for
+  example "file has holes; preallocate it". -r removes the file's
+  configuration; "dumpon off" removes everything as before.
+- savecore treats a regular file as a dump medium with a 4096-byte
+  sector size, the kernel file dumper's block size, and a size equal
+  to the file's whole 4096-byte blocks. The trailing header is read
+  from the last whole block, as from a partition's last sector. The
+  fileargs capability gains CAP_FSTAT. Absolute paths outside /dev are
+  no longer given a /dev/ prefix, so "savecore /var/crash
+  /private/var/vm/kernelcore" works, as does an fstab "dump" entry
+  that names a file.
+- A configured dump file cannot be written, so savecore cannot clear
+  its header. When the clear fails with ETXTBSY, savecore says to run
+  it before dumpon, or after dumpon -r.
+- dumpon(8) and savecore(8) document dump files.
+
+Only UFS: on ZFS the kernel refuses the file and dumpon prints its
+error. Devices and netdump behave exactly as before.
+
+Carried out-of-tree for NextBSD.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ sbin/dumpon/dumpon.8     | 41 +++++++++++++++++++++++++++++--
+ sbin/dumpon/dumpon.c     | 42 +++++++++++++++++++++++++++++---
+ sbin/savecore/savecore.8 | 16 ++++++++++++-
+ sbin/savecore/savecore.c | 52 +++++++++++++++++++++++++++++++++-------
+ 4 files changed, 136 insertions(+), 15 deletions(-)
+
+diff --git a/sbin/dumpon/dumpon.8 b/sbin/dumpon/dumpon.8
+index f2082a58..4dc3ec76 100644
+--- a/sbin/dumpon/dumpon.8
++++ b/sbin/dumpon/dumpon.8
+@@ -25,7 +25,7 @@
+ .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ .\" SUCH DAMAGE.
+ .\"
+-.Dd April 23, 2020
++.Dd November 1, 2026
+ .Dt DUMPON 8
+ .Os
+ .Sh NAME
+@@ -40,7 +40,7 @@
+ .Op Fl k Ar pubkey
+ .Op Fl Z
+ .Op Fl z
+-.Ar device
++.Ar device | file
+ .Nm
+ .Op Fl i Ar index
+ .Op Fl r
+@@ -152,6 +152,43 @@ is incompatible with
+ .Pp
+ Zstandard provides superior compression ratio and performance.
+ .El
++.Ss Dump files
++On NextBSD,
++.Ar file
++may be the absolute path of a regular file on a UFS file system, such as
++.Pa /private/var/vm/kernelcore ,
++instead of a dump device.
++The file must be preallocated, with no holes: create it with
++.Xr dd 1
++from
++.Pa /dev/zero ,
++not with
++.Xr truncate 1 .
++The kernel pins the file and, at panic time, writes the dump straight to
++its blocks on the disk, with the file system off the path.
++While it is configured the file cannot be written, truncated, renamed or
++removed.
++The dump device list names it by its absolute path, which
++.Fl l
++prints and
++.Fl r
++and
++.Xr savecore 8
++accept.
++Unmounting its file system removes it from the list.
++.Pp
++Only UFS is supported, and the disk under the file system must support
++kernel dumps.
++The dump is written in 4096-byte blocks, so
++.Xr textdump 4
++cannot use a dump file.
++Run
++.Xr savecore 8
++on the file before
++.Nm
++configures it: a configured file cannot be written, so
++.Xr savecore 8
++cannot clear its dump header.
+ .Ss Netdump
+ .Nm
+ may also configure the kernel to dump to a remote
+diff --git a/sbin/dumpon/dumpon.c b/sbin/dumpon/dumpon.c
+index e6c1634f..50f5523b 100644
+--- a/sbin/dumpon/dumpon.c
++++ b/sbin/dumpon/dumpon.c
+@@ -33,6 +33,7 @@
+ #include <sys/capsicum.h>
+ #include <sys/disk.h>
+ #include <sys/socket.h>
++#include <sys/stat.h>
+ #include <sys/sysctl.h>
+ #include <sys/wait.h>
+ 
+@@ -69,12 +70,14 @@
+ #endif
+ 
+ static int	verbose;
++/* NextBSD: the dump target is a regular file, not a device. */
++static bool	regfile;
+ 
+ static _Noreturn void
+ usage(void)
+ {
+ 	fprintf(stderr,
+-    "usage: dumpon [-i index] [-r] [-v] [-k <pubkey>] [-Zz] <device>\n"
++    "usage: dumpon [-i index] [-r] [-v] [-k <pubkey>] [-Zz] <device | /file>\n"
+     "       dumpon [-i index] [-r] [-v] [-k <pubkey>] [-Zz]\n"
+     "              [-g <gateway>] -s <server> -c <client> <iface>\n"
+     "       dumpon [-v] off\n"
+@@ -208,7 +211,13 @@ check_size(int fd, const char *fn)
+ 	len = sizeof(physmem);
+ 	if (sysctl(name, namelen, &physmem, &len, NULL, 0) != 0)
+ 		err(EX_OSERR, "can't get memory size");
+-	if (ioctl(fd, DIOCGMEDIASIZE, &mediasize) != 0)
++	if (regfile) {
++		struct stat sb;
++
++		if (fstat(fd, &sb) != 0)
++			err(EX_OSERR, "%s: can't get size", fn);
++		mediasize = sb.st_size;
++	} else if (ioctl(fd, DIOCGMEDIASIZE, &mediasize) != 0)
+ 		err(EX_OSERR, "%s: can't get size", fn);
+ 	if ((uintmax_t)mediasize < (uintmax_t)physmem)
+ 		errx(EX_IOERR, "%s is smaller than physical memory", fn);
+@@ -435,12 +444,19 @@ listdumpdev(void)
+ 	}
+ }
+ 
++/*
++ * A device is named with or without /dev/.  On NextBSD any other absolute
++ * path names a regular file: the kernel pins it and writes the dump
++ * through its block map.
++ */
+ static int
+ opendumpdev(const char *arg, char *dumpdev)
+ {
++	struct stat sb;
+ 	int fd, i;
+ 
+-	if (strncmp(arg, _PATH_DEV, sizeof(_PATH_DEV) - 1) == 0)
++	if (strncmp(arg, _PATH_DEV, sizeof(_PATH_DEV) - 1) == 0 ||
++	    arg[0] == '/')
+ 		strlcpy(dumpdev, arg, PATH_MAX);
+ 	else {
+ 		i = snprintf(dumpdev, PATH_MAX, "%s%s", _PATH_DEV, arg);
+@@ -453,6 +469,12 @@ opendumpdev(const char *arg, char *dumpdev)
+ 	fd = open(dumpdev, O_RDONLY);
+ 	if (fd < 0)
+ 		err(EX_OSFILE, "%s", dumpdev);
++	if (fstat(fd, &sb) != 0)
++		err(EX_OSFILE, "%s", dumpdev);
++	if (S_ISREG(sb.st_mode))
++		regfile = true;
++	else if (!S_ISCHR(sb.st_mode))
++		errx(EX_USAGE, "%s: not a device or a regular file", dumpdev);
+ 	return (fd);
+ }
+ 
+@@ -685,6 +707,20 @@ main(int argc, char *argv[])
+ 	free(kdap->kda_encryptedkey);
+ 	explicit_bzero(kdap, sizeof(*kdap));
+ 	if (error != 0) {
++		if (regfile) {
++			/*
++			 * A kernel without the file dumper hands the ioctl to
++			 * the file system, which does not know it.  Otherwise
++			 * err() adds the kernel's extended error, e.g. "file
++			 * has holes; preallocate it".
++			 */
++			if (error == ENOTTY)
++				errx(EX_UNAVAILABLE, "%s: this kernel cannot "
++				    "write kernel dumps to a regular file",
++				    dumpdev);
++			errno = error;
++			err(EX_OSERR, "%s", dumpdev);
++		}
+ 		if (netdump) {
+ 			/*
+ 			 * Be slightly less user-hostile for some common
+diff --git a/sbin/savecore/savecore.8 b/sbin/savecore/savecore.8
+index 1fb79c51..dd88a32e 100644
+--- a/sbin/savecore/savecore.8
++++ b/sbin/savecore/savecore.8
+@@ -25,7 +25,7 @@
+ .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ .\" SUCH DAMAGE.
+ .\"
+-.Dd July 16, 2025
++.Dd November 1, 2026
+ .Dt SAVECORE 8
+ .Os
+ .Sh NAME
+@@ -136,6 +136,20 @@ marked as
+ .Dq dump
+ or
+ .Dq swap .
++On NextBSD a
++.Ar device
++may also be the absolute path of a dump file, a regular file that
++.Xr dumpon 8
++configured as the dump target; it is read in 4096-byte sectors.
++A dump file cannot be written while
++.Xr dumpon 8
++has it configured, so run
++.Nm
++before
++.Xr dumpon 8 ,
++or after
++.Dq Nm dumpon Fl r ,
++to let it clear the dump header.
+ The
+ .Nm
+ utility
+diff --git a/sbin/savecore/savecore.c b/sbin/savecore/savecore.c
+index 2f3ad3ad..27f5ac5b 100644
+--- a/sbin/savecore/savecore.c
++++ b/sbin/savecore/savecore.c
+@@ -97,6 +97,13 @@
+ /* The size of the buffer used for I/O. */
+ #define	BUFFERSIZE	(1024*1024)
+ 
++/*
++ * NextBSD: the sector size of a regular dump file.  The kernel's file
++ * dumper writes it in blocks of this size, with the trailing header in
++ * the last whole block.
++ */
++#define	DUMPFILE_SECTORSIZE	4096
++
+ #define	STATUS_BAD	0
+ #define	STATUS_GOOD	1
+ #define	STATUS_UNKNOWN	2
+@@ -931,6 +938,7 @@ DoFile(const char *savedir, int savedirfd, const char *device)
+ 	struct kerneldumpheader kdhf, kdhl;
+ 	uint8_t *dumpkey;
+ 	off_t mediasize, dumpextent, dumplength, firsthd, lasthd;
++	struct stat sb;
+ 	FILE *core;
+ 	int fdcore, fddev, error;
+ 	int bounds, status;
+@@ -972,9 +980,24 @@ DoFile(const char *savedir, int savedirfd, const char *device)
+ 		return;
+ 	}
+ 
+-	error = ioctl(fddev, DIOCGMEDIASIZE, &mediasize);
+-	if (!error)
+-		error = ioctl(fddev, DIOCGSECTORSIZE, &sectorsize);
++	if (fstat(fddev, &sb) == 0 && S_ISREG(sb.st_mode)) {
++		/*
++		 * A dump file (dumpon(8) on a regular file): the kernel
++		 * used its whole 4096-byte blocks as the dump medium.
++		 */
++		sectorsize = DUMPFILE_SECTORSIZE;
++		mediasize = rounddown(sb.st_size, DUMPFILE_SECTORSIZE);
++		if (mediasize < 2 * DUMPFILE_SECTORSIZE) {
++			logmsg(LOG_ERR, "%s is too small to hold a dump",
++			    device);
++			goto closefd;
++		}
++		error = 0;
++	} else {
++		error = ioctl(fddev, DIOCGMEDIASIZE, &mediasize);
++		if (!error)
++			error = ioctl(fddev, DIOCGSECTORSIZE, &sectorsize);
++	}
+ 	if (error) {
+ 		logmsg(LOG_ERR,
+ 		    "couldn't find media and/or sector size of %s: %m", device);
+@@ -1274,9 +1297,15 @@ DoFile(const char *savedir, int savedirfd, const char *device)
+ 		memcpy(kdhl.magic, KERNELDUMPMAGIC_CLEARED, sizeof(kdhl.magic));
+ 		memcpy(temp, &kdhl, sizeof(kdhl));
+ 		if (lseek(fddev, lasthd, SEEK_SET) != lasthd ||
+-		    write(fddev, temp, sectorsize) != (ssize_t)sectorsize)
+-			logmsg(LOG_ERR,
+-			    "error while clearing the dump header: %m");
++		    write(fddev, temp, sectorsize) != (ssize_t)sectorsize) {
++			if (errno == ETXTBSY)
++				logmsg(LOG_ERR, "cannot clear the dump header: "
++				    "%s is in use by dumpon(8); run savecore "
++				    "before dumpon, or after dumpon -r", device);
++			else
++				logmsg(LOG_ERR,
++				    "error while clearing the dump header: %m");
++		}
+ 	}
+ 	xo_close_container_h(xostdout, "crashdump");
+ 	if (xo_finish_h(xostdout) < 0)
+@@ -1295,7 +1324,10 @@ DoFile(const char *savedir, int savedirfd, const char *device)
+ 	close(fddev);
+ }
+ 
+-/* Prepend "/dev/" to any arguments that don't already have it */
++/*
++ * Prepend "/dev/" to any arguments that don't already have it.  On NextBSD
++ * any other absolute path is a dump file and is kept as it is.
++ */
+ static char **
+ devify(int argc, char **argv)
+ {
+@@ -1308,7 +1340,8 @@ devify(int argc, char **argv)
+ 		exit(EXIT_FAILURE);
+ 	}
+ 	for (i = 0; i < argc; i++) {
+-		if (strncmp(argv[i], _PATH_DEV, sizeof(_PATH_DEV) - 1) == 0)
++		if (strncmp(argv[i], _PATH_DEV, sizeof(_PATH_DEV) - 1) == 0 ||
++		    argv[i][0] == '/')
+ 			devs[i] = strdup(argv[i]);
+ 		else {
+ 			char *fullpath;
+@@ -1393,7 +1426,8 @@ init_caps(int argc, char **argv)
+ 	 * The fileargs capability does not currently provide a way to limit
+ 	 * ioctls.
+ 	 */
+-	(void)cap_rights_init(&rights, CAP_PREAD, CAP_WRITE, CAP_IOCTL);
++	(void)cap_rights_init(&rights, CAP_FSTAT, CAP_PREAD, CAP_WRITE,
++	    CAP_IOCTL);
+ 	capfa = fileargs_init(argc, argv, checkfor || keep ? O_RDONLY : O_RDWR,
+ 	    0, &rights, FA_OPEN);
+ 	if (capfa == NULL) {
+-- 
+2.54.0 (Apple Git-157)
+
