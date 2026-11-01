@@ -1,0 +1,229 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pkgdemon <jpm820@gmail.com>
+Date: Sun, 1 Nov 2026 01:57:50 -0500
+Subject: [PATCH] NextBSD: swapon(8): swap on a local swap file directly,
+ without md(4)
+
+With the NextBSD kernel's extent-map swap pager, swapon(2) accepts a
+regular file on UFS and pages to its blocks without the filesystem on
+the I/O path (nextbsd/nextbsd-kernel#214). md(4) vnode swap, whose
+kthread can deadlock in VOP_WRITE under memory pressure, is no longer
+needed for it.
+
+- "swapon /private/var/vm/swapfile0" calls swapon(2) on the file. On a
+  kernel or filesystem that cannot do that (ENOTBLK: an older kernel,
+  or ZFS) it fails with a message saying so instead of "Block device
+  required". -E is skipped for regular files, which have no
+  DIOCGDELETE.
+- An fstab entry "md none swap sw,file=/path" swaps on the file itself
+  the same way, and falls back to attaching an md(4) vnode device, as
+  before, only on ENOTBLK. swapoff tries the file first and falls back
+  to the md(4) device when the file is not itself a swap device.
+  md.eli entries keep md(4), which geli(8) needs.
+- swapctl -l and swapinfo list a swap file (no device, NODEV) as
+  "[file]" instead of "/dev/#NODEV".
+- swapon(8) documents the regular-file case.
+
+Carried out-of-tree for NextBSD.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ sbin/swapon/swapon.8 |  22 +++++++++
+ sbin/swapon/swapon.c | 110 ++++++++++++++++++++++++++++++++++++-------
+ 2 files changed, 114 insertions(+), 18 deletions(-)
+
+diff --git a/sbin/swapon/swapon.8 b/sbin/swapon/swapon.8
+index f5534c06e..0020ed97f 100644
+--- a/sbin/swapon/swapon.8
++++ b/sbin/swapon/swapon.8
+@@ -99,6 +99,28 @@ has copied the crash dump to another location, use the
+ .Dq late
+ option.
+ .Pp
++On NextBSD a swap device may also be a regular file on a UFS file system.
++The kernel pins the file, which must have no holes
++(create it with
++.Xr dd 1
++from
++.Pa /dev/zero ,
++not with
++.Xr truncate 1 ) ,
++and pages to its blocks directly, without an
++.Xr md 4
++device.
++While it is in use the file cannot be written, truncated, renamed or
++removed, and its file system cannot be unmounted.
++An
++.Pa /etc/fstab
++entry of the form
++.Dq Li md none swap sw,file=/path
++swaps on the file itself in the same way, and falls back to an
++.Xr md 4
++vnode device only when the kernel or the file system cannot swap on
++the file directly.
++.Pp
+ The
+ .Nm swapoff
+ utility removes the specified swap devices from the system.
+diff --git a/sbin/swapon/swapon.c b/sbin/swapon/swapon.c
+index 3dff4df5e..d4059d433 100644
+--- a/sbin/swapon/swapon.c
++++ b/sbin/swapon/swapon.c
+@@ -49,6 +49,7 @@
+ #include <limits.h>
+ #include <paths.h>
+ #include <stdarg.h>
++#include <stdbool.h>
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
+@@ -61,6 +62,8 @@ static const char *swap_on_off(const char *, int, char *);
+ static const char *swap_on_off_geli(const char *, char *, int);
+ static const char *swap_on_off_md(const char *, char *, int);
+ static const char *swap_on_off_sfile(const char *, int);
++static bool swap_on_off_file(const char *, int, const char **);
++static void swap_error(const char *, int, bool);
+ static void swaplist(int, int, int);
+ static int run_cmd(int *, const char *, ...) __printflike(2, 3);
+ 
+@@ -468,6 +471,18 @@ swap_on_off_md(const char *name, char *mntops, int doingall)
+ 		return (NULL);
+ 	}
+ 
++	/*
++	 * NextBSD: swap on the file itself, through the kernel's extent-map
++	 * swap pager, instead of on an md(4) vnode device.  Only when the
++	 * kernel or the file's filesystem cannot (ENOTBLK) does the entry
++	 * fall back to md(4), as before.  md.eli entries need the md(4)
++	 * device for geli(8) and keep it.
++	 */
++	if (suffix == NULL && swap_on_off_file(vnodefile, doingall, &ret)) {
++		free(vnodefile);
++		return (ret);
++	}
++
+ 	if (which_prog == SWAPON) {
+ 		if (mdunit == -1) {
+ 			error = run_cmd(&fd, "%s -l -n -f %s",
+@@ -742,32 +757,87 @@ swapon_trim(const char *name)
+ 	return (error);
+ }
+ 
++/*
++ * NextBSD: swap directly on the regular file named by an fstab
++ * "md ... file=" entry.  Returns false, having printed nothing, when the
++ * entry should be handled through md(4) as before: the path is not a
++ * regular file, swapon(2) answers ENOTBLK (a kernel without file swap,
++ * or a filesystem other than UFS), or swapoff(2) answers EINVAL (the file
++ * is not itself a swap device, so it may be behind an md(4) device).
++ */
++static bool
++swap_on_off_file(const char *file, int doingall, const char **retp)
++{
++	static char path[PATH_MAX];
++	struct stat sb;
++	int error;
++
++	if (stat(file, &sb) != 0 || !S_ISREG(sb.st_mode))
++		return (false);
++	if (strlcpy(path, file, sizeof(path)) >= sizeof(path))
++		return (false);
++	if (which_prog == SWAPON)
++		error = swapon(path);
++	else /* SWAPOFF */
++		error = swapoff(path, fflag ? SWAPOFF_FORCE : 0);
++	if (error == -1) {
++		if (which_prog == SWAPON && errno == ENOTBLK)
++			return (false);
++		if (which_prog == SWAPOFF && errno == EINVAL)
++			return (false);
++		swap_error(path, doingall, true);
++		*retp = NULL;
++		return (true);
++	}
++	*retp = path;
++	return (true);
++}
++
++static void
++swap_error(const char *name, int doingall, bool isreg)
++{
++
++	switch (errno) {
++	case EBUSY:
++		if (doingall == 0)
++			warnx("%s: Device already in use", name);
++		break;
++	case ENOTBLK:
++		/* NextBSD swaps on regular files on UFS only. */
++		if (which_prog == SWAPON && isreg)
++			warnx("%s: this kernel cannot swap on a regular file "
++			    "on this filesystem", name);
++		else
++			warn("%s", name);
++		break;
++	case EINVAL:
++		if (which_prog == SWAPON && !isreg)
++			warnx("%s: NSWAPDEV limit reached", name);
++		else if (which_prog == SWAPON || doingall == 0)
++			warn("%s", name);
++		break;
++	default:
++		warn("%s", name);
++		break;
++	}
++}
++
+ static const char *
+ swap_on_off_sfile(const char *name, int doingall)
+ {
++	struct stat sb;
+ 	int error;
++	bool isreg;
+ 
++	/* NextBSD: a regular file is swapped on directly, without md(4). */
++	isreg = stat(name, &sb) == 0 && S_ISREG(sb.st_mode);
+ 	if (which_prog == SWAPON)
+-		error = Eflag ? swapon_trim(name) : swapon(name);
++		error = Eflag && !isreg ? swapon_trim(name) : swapon(name);
+ 	else /* SWAPOFF */
+ 		error = swapoff(name, fflag ? SWAPOFF_FORCE : 0);
+ 
+ 	if (error == -1) {
+-		switch (errno) {
+-		case EBUSY:
+-			if (doingall == 0)
+-				warnx("%s: Device already in use", name);
+-			break;
+-		case EINVAL:
+-			if (which_prog == SWAPON)
+-				warnx("%s: NSWAPDEV limit reached", name);
+-			else if (doingall == 0)
+-				warn("%s", name);
+-			break;
+-		default:
+-			warn("%s", name);
+-			break;
+-		}
++		swap_error(name, doingall, isreg);
+ 		return (NULL);
+ 	}
+ 	return (name);
+@@ -873,8 +943,12 @@ swaplist(int lflag, int sflag, int hflag)
+ 		if (lflag) {
+ 			sizetobuf(buf, sizeof(buf), hflag, tmp_total, hlen,
+ 			    blocksize);
+-			printf("/dev/%-8s %s ", devname(xsw.xsw_dev, S_IFCHR),
+-			    buf);
++			/* A swap file (NFS or local) has no device. */
++			if (xsw.xsw_dev == NODEV)
++				printf("%-13s %s ", "[file]", buf);
++			else
++				printf("/dev/%-8s %s ",
++				    devname(xsw.xsw_dev, S_IFCHR), buf);
+ 			sizetobuf(buf, sizeof(buf), hflag, tmp_used, hlen,
+ 			    blocksize);
+ 			printf("%s\n", buf);
+-- 
+2.54.0 (Apple Git-157)
+

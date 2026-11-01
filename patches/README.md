@@ -68,3 +68,17 @@ and `libzstd.pc` (version read from `zstd.h`) in `/usr/libdata/pkgconfig`.
 clang programs) links `-lzstd`; rescue and `tools/bsdbox` use `-lzstd`, and
 `ObsoleteFiles.inc` lists the old `libprivatezstd` files. "Inspect /stage"
 prints the library, headers, `.pc` and `zstd`'s `NEEDED` entries.
+
+## `0007`: swapon(8) swaps on a local file without md(4)
+
+NextBSD's kernel accepts `swapon(2)` on a regular file on UFS and pages to
+its blocks through a pinned extent map (nextbsd/nextbsd-kernel#214), so a
+swap file no longer needs an `md(4)` vnode device, whose kthread can
+deadlock in `VOP_WRITE` under memory pressure. `0007` makes
+`swapon /private/var/vm/swapfile0` call `swapon(2)` on the file, and an
+fstab `md none swap sw,file=/path` entry swap on the file itself. Only
+`ENOTBLK` (a kernel without #214, or a filesystem other than UFS, such as
+ZFS) falls back: the fstab `md` form attaches `md(4)` as before, and a
+plain file path fails with a message saying the kernel cannot swap on it.
+`md.eli` entries keep `md(4)` for `geli(8)`. `swapctl -l`/`swapinfo` show a
+swap file as `[file]`.
