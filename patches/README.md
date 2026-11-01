@@ -82,3 +82,17 @@ ZFS) falls back: the fstab `md` form attaches `md(4)` as before, and a
 plain file path fails with a message saying the kernel cannot swap on it.
 `md.eli` entries keep `md(4)` for `geli(8)`. `swapctl -l`/`swapinfo` show a
 swap file as `[file]`.
+
+## `0008`: dumpon(8)/savecore(8) on a regular file
+
+NextBSD's kernel can write a crash dump to a preallocated regular file on
+UFS, such as `/private/var/vm/kernelcore`, through the file's pinned extent
+map (nextbsd/nextbsd-kernel#216). `0008` makes `dumpon /path/to/file`
+configure it: an absolute path outside `/dev` is opened as is and
+`DIOCSKERNELDUMP` goes to the kernel's file dumper. `savecore` reads a
+regular file as a dump medium with 4096-byte sectors and keeps absolute
+paths without a `/dev/` prefix. A configured dump file cannot be written,
+so savecore cannot clear its header while it is configured; savecore says
+to run it before `dumpon`, or after `dumpon -r`. On a kernel without the
+file dumper, dumpon says the kernel cannot dump to a regular file; on ZFS
+the kernel refuses the file. Devices and netdump are unchanged.

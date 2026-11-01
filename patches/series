@@ -5,3 +5,4 @@
 0005-NextBSD-efiio.h-keep-the-efi_-_ioc-compat-structures.patch
 0006-NextBSD-libzstd-install-as-public-libzstd.so.1-with-.patch
 0007-NextBSD-swapon-8-swap-on-a-local-swap-file-directly-.patch
+0008-NextBSD-dumpon-8-savecore-8-kernel-dumps-to-a-regula.patch
