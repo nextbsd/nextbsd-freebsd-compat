@@ -1,0 +1,185 @@
+From 6668904e915d25d4939e88eb0751ae96ce53144d Mon Sep 17 00:00:00 2001
+From: pkgdemon <jpm820@gmail.com>
+Date: Sat, 31 Oct 2026 22:41:56 -0500
+Subject: [PATCH] NextBSD: libzstd: install as public libzstd.so.1 with headers
+ and .pc
+
+releng/15.1 builds lib/libzstd as a PRIVATELIB, so world installs only
+libprivatezstd.so.5 and libprivatezstd.a, with zstd.h under
+/usr/include/private/zstd and no pkg-config file. NextBSD has no ports
+collection, so programs built for it (libsquashfs for AppImage icons
+first) need the base zstd as an ordinary public library. One public
+copy also means one zstd for the whole OS.
+
+lib/libzstd: drop PRIVATELIB and set SHLIB_MAJOR to 1, so the library
+is libzstd.so.1, zstd's own SONAME. Install zstd.h, zstd_errors.h and
+zdict.h into /usr/include. Generate libzstd.pc from upstream's
+libzstd.pc.in, with the version read from zstd.h (as liblzma does), and
+install it in /usr/libdata/pkgconfig. libzstd.a stays for rescue and
+the bootstrap build.
+
+share/mk: zstd moves from _PRIVATELIBS to _LIBRARIES, and
+bsd.libnames.mk gains LIBZSTD, so LIBADD=zstd links -lzstd. That covers
+zstd(1), libarchive (bsdtar, bsdcpio, bsdcat), gzip, mkuzip, savecore
+and the clang/lld/lldb programs.
+
+rescue and tools/bsdbox: CRUNCH_LIBS uses -lzstd. tools/build no longer
+creates usr/include/private/zstd. ObsoleteFiles.inc lists the old
+libprivatezstd files and the private header directory.
+
+ZFS (libzpool, libzfs) builds OpenZFS's own zstd copy and is not
+affected.
+
+Refs nextbsd/nextbsd#611. Carried out-of-tree for NextBSD.
+---
+ ObsoleteFiles.inc          |  7 +++++++
+ lib/libzstd/Makefile       | 26 +++++++++++++++++++++++---
+ rescue/rescue/Makefile     |  2 +-
+ share/mk/bsd.libnames.mk   |  1 +
+ share/mk/src.libnames.mk   |  4 ++--
+ tools/bsdbox/Makefile.base |  2 +-
+ tools/build/Makefile       |  1 -
+ 7 files changed, 35 insertions(+), 8 deletions(-)
+
+diff --git a/ObsoleteFiles.inc b/ObsoleteFiles.inc
+index 1fc7ffb53..ae3194349 100644
+--- a/ObsoleteFiles.inc
++++ b/ObsoleteFiles.inc
+@@ -51,6 +51,13 @@
+ #   xargs -n1 | sort | uniq -d;
+ # done
+ 
++# 20261031: NextBSD: libzstd is a public library, libzstd.so.1
++OLD_FILES+=usr/include/private/zstd/zstd.h
++OLD_DIRS+=usr/include/private/zstd
++OLD_FILES+=usr/lib/libprivatezstd.a
++OLD_FILES+=usr/lib/libprivatezstd.so
++OLD_LIBS+=usr/lib/libprivatezstd.so.5
++
+ # 20261020: Regenerate trust store
+ OLD_FILES+=usr/share/certs/trusted/Atos_TrustedRoot_2011.pem
+ OLD_FILES+=usr/share/certs/trusted/SecureSign_Root_CA12.pem
+diff --git a/lib/libzstd/Makefile b/lib/libzstd/Makefile
+index 82e9d2a5b..11f708cfe 100644
+--- a/lib/libzstd/Makefile
++++ b/lib/libzstd/Makefile
+@@ -36,7 +36,9 @@ SRCS=	entropy_common.c \
+ 	hist.c \
+ 	fastcover.c
+ WARNS?=	2
+-INCS=	zstd.h
++# NextBSD: public library under zstd's own SONAME, with its headers and .pc.
++SHLIB_MAJOR=	1
++INCS=	zstd.h zstd_errors.h zdict.h
+ CFLAGS+=	-I${ZSTDDIR}/lib -I${ZSTDDIR}/lib/common -DXXH_NAMESPACE=ZSTD_ \
+ 		-DZSTD_MULTITHREAD=1 -fvisibility=hidden
+ LIBADD=	pthread
+@@ -46,8 +48,6 @@ LIBADD=	pthread
+ # explicitly disable assembly.
+ CFLAGS+=	-DZSTD_DISABLE_ASM
+ 
+-PRIVATELIB=	yes
+-
+ ZSTDDIR=	${SRCTOP}/sys/contrib/zstd
+ .PATH:	${ZSTDDIR}/lib/common ${ZSTDDIR}/lib/compress \
+ 	${ZSTDDIR}/lib/decompress ${ZSTDDIR}/lib/deprecated \
+@@ -76,4 +76,24 @@ CFLAGS.zstd_decompress_block.c+=	-fno-tree-vectorize
+ SRCS+=	zstd_kfreebsd.c
+ .endif
+ 
++VERSION_MAJOR!=	sed -n '/define[[:space:]]*ZSTD_VERSION_MAJOR/{s,[^0-9],,gp;q;}' \
++			${ZSTDDIR}/lib/zstd.h
++VERSION_MINOR!=	sed -n '/define[[:space:]]*ZSTD_VERSION_MINOR/{s,[^0-9],,gp;q;}' \
++			${ZSTDDIR}/lib/zstd.h
++VERSION_RELEASE!= sed -n '/define[[:space:]]*ZSTD_VERSION_RELEASE/{s,[^0-9],,gp;q;}' \
++			${ZSTDDIR}/lib/zstd.h
++
++CLEANFILES+=	libzstd.pc
++
++PCFILES=	libzstd.pc
++
++libzstd.pc: libzstd.pc.in
++	sed -e 's,@PREFIX@,/usr,g ; \
++		s,@EXEC_PREFIX@,$${prefix},g ; \
++		s,@INCLUDEDIR@,${INCLUDEDIR},g ; \
++		s,@LIBDIR@,${LIBDIR},g ; \
++		s,@VERSION@,${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_RELEASE},g ; \
++		s,@LIBS_MT@,,g ; \
++		s,@LIBS_PRIVATE@,-pthread,g' ${.ALLSRC} > ${.TARGET}
++
+ .include <bsd.lib.mk>
+diff --git a/rescue/rescue/Makefile b/rescue/rescue/Makefile
+index 797daf3d2..94ab4d0b4 100644
+--- a/rescue/rescue/Makefile
++++ b/rescue/rescue/Makefile
+@@ -225,7 +225,7 @@ CRUNCH_ALIAS_xz= unxz lzma unlzma xzcat lzcat
+ 
+ CRUNCH_PROGS_usr.bin+= zstd
+ CRUNCH_ALIAS_zstd= unzstd zstdcat zstdmt
+-CRUNCH_LIBS+=	-lprivatezstd
++CRUNCH_LIBS+=	-lzstd
+ 
+ CRUNCH_PROGS_usr.bin+=	fetch
+ CRUNCH_LIBS+=	-lfetch
+diff --git a/share/mk/bsd.libnames.mk b/share/mk/bsd.libnames.mk
+index 955e3c4eb..70f904d01 100644
+--- a/share/mk/bsd.libnames.mk
++++ b/share/mk/bsd.libnames.mk
+@@ -188,6 +188,7 @@ LIBZFS?=	${LIBDESTDIR}${LIBDIR_BASE}/libzfs.a
+ LIBZFS_CORE?=	${LIBDESTDIR}${LIBDIR_BASE}/libzfs_core.a
+ LIBZFSBOOTENV?=	${LIBDESTDIR}${LIBDIR_BASE}/libzfsbootenv.a
+ LIBZPOOL?=	${LIBDESTDIR}${LIBDIR_BASE}/libzpool.a
++LIBZSTD?=	${LIBDESTDIR}${LIBDIR_BASE}/libzstd.a
+ LIBZUTIL?=	${LIBDESTDIR}${LIBDIR_BASE}/libzutil.a
+ 
+ # enforce -lpthread, -lc, and -lsys to always be the last in that exact order
+diff --git a/share/mk/src.libnames.mk b/share/mk/src.libnames.mk
+index 945df6076..685b129b4 100644
+--- a/share/mk/src.libnames.mk
++++ b/share/mk/src.libnames.mk
+@@ -35,8 +35,7 @@ _PRIVATELIBS=	\
+ 		ssh \
+ 		ucl \
+ 		unbound \
+-		yaml \
+-		zstd
++		yaml
+ 
+ # Let projects based on FreeBSD append to _PRIVATELIBS
+ # by maintaining their own LOCAL_PRIVATELIBS list.
+@@ -253,6 +252,7 @@ _LIBRARIES=	\
+ 		zfs \
+ 		zfsbootenv \
+ 		zpool \
++		zstd \
+ 		zutil
+ 
+ .if ${MK_KERBEROS} != "no" && ${MK_MITKRB5} != "no"
+diff --git a/tools/bsdbox/Makefile.base b/tools/bsdbox/Makefile.base
+index 8dfc2c50c..a744e1497 100644
+--- a/tools/bsdbox/Makefile.base
++++ b/tools/bsdbox/Makefile.base
+@@ -21,7 +21,7 @@ CRUNCH_LIBS+=		-ldevstat -lncursesw -lmemstat -lkvm -lelf
+ CRUNCH_PROGS_usr.bin+=	cpio
+ # XXX SSL ?
+ CRUNCH_LIBS+=		-larchive -lbz2 -lz -llzma -lbsdxml -lssl -lcrypto
+-CRUNCH_LIBS+=		-lprivatezstd -lthr
++CRUNCH_LIBS+=		-lzstd -lthr
+ 
+ # Clear requires tput, and it's a shell script so it won't be crunched
+ CRUNCH_PROGS_usr.bin+=	tput
+diff --git a/tools/build/Makefile b/tools/build/Makefile
+index e1ccfa21d..0401c00cc 100644
+--- a/tools/build/Makefile
++++ b/tools/build/Makefile
+@@ -506,7 +506,6 @@ INSTALLDIR_LIST= \
+ 	usr/include/openssl \
+ 	usr/include/private/ucl \
+ 	usr/include/private/yaml \
+-	usr/include/private/zstd \
+ 	usr/lib \
+ 	usr/libdata/pkgconfig \
+ 	usr/libexec
+-- 
+2.54.0 (Apple Git-157)
+

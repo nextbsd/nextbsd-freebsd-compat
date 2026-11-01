@@ -146,6 +146,13 @@ jobs:
           "${CROSS_BINDIR}/llvm-readelf" -n /stage/bin/sh 2>&1 \
             || readelf -n /stage/bin/sh 2>&1 || true
           file /stage/bin/sh 2>&1 || true
+          echo "=== public libzstd (patch 0006, nextbsd/nextbsd#611) ==="
+          ls -l /stage/usr/lib/libzstd* /stage/usr/lib/libprivatezstd* \
+            /stage/usr/include/zstd.h /stage/usr/include/zstd_errors.h \
+            /stage/usr/include/zdict.h /stage/usr/libdata/pkgconfig/libzstd.pc 2>&1 || true
+          cat /stage/usr/libdata/pkgconfig/libzstd.pc 2>&1 || true
+          "${CROSS_BINDIR}/llvm-readelf" -d /stage/usr/lib/libzstd.so.1 2>&1 | grep -E 'SONAME|NEEDED' || true
+          "${CROSS_BINDIR}/llvm-readelf" -d /stage/usr/bin/zstd 2>&1 | grep -E 'NEEDED' || true
 
       - name: Pack base artifact
         run: |

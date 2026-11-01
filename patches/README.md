@@ -54,3 +54,17 @@ now.
 | `0003` | `sbin/devd/devd.cc` | keeps the releng/15.1 `system="kern"` error, not `#error "Remove this gross hack"` |
 | `0004` | `usr.sbin/ctladm/ctladm.c` | keeps `ctladm port -l/-q/-x` |
 | `0005` | `sys/sys/efiio.h` | keeps `efi_get_table_ioc`/`efi_waketime_ioc` for `efitable` and `efiwake` |
+
+## `0006`: public libzstd
+
+releng/15.1 builds `lib/libzstd` as a `PRIVATELIB` (`libprivatezstd.so.5`,
+headers in `/usr/include/private/zstd`, no `.pc`). NextBSD has no ports, so
+programs built for it need base's zstd as an ordinary library
+(nextbsd/nextbsd#611). `0006` installs it under zstd's own SONAME,
+`libzstd.so.1`, with `zstd.h`, `zstd_errors.h`, `zdict.h` in `/usr/include`
+and `libzstd.pc` (version read from `zstd.h`) in `/usr/libdata/pkgconfig`.
+`share/mk` moves zstd from `_PRIVATELIBS` to `_LIBRARIES`, so every
+`LIBADD= zstd` consumer (zstd(1), libarchive, gzip, mkuzip, savecore, the
+clang programs) links `-lzstd`; rescue and `tools/bsdbox` use `-lzstd`, and
+`ObsoleteFiles.inc` lists the old `libprivatezstd` files. "Inspect /stage"
+prints the library, headers, `.pc` and `zstd`'s `NEEDED` entries.

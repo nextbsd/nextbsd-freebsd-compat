@@ -37,7 +37,9 @@ step logs each patch and fails the build if one does not apply. The current
 series keeps the releng/15.1 code paths that upstream gates on
 `__FreeBSD_version` 16.x values, and makes `crtbrand`'s ELF ABI note follow
 `sys/sys/param.h` again, so world builds correctly once NextBSD sets
-`__FreeBSD_version` to 2700000 (nextbsd/nextbsd-kernel#376). See
+`__FreeBSD_version` to 2700000 (nextbsd/nextbsd-kernel#376). It also makes
+base's zstd a public library, `libzstd.so.1` with its headers and
+`libzstd.pc` (nextbsd/nextbsd#611). See
 [`patches/README.md`](patches/README.md).
 
 A `make.conf` shim bakes rtld's compiled-in default search path
