@@ -6,3 +6,4 @@
 0006-NextBSD-libzstd-install-as-public-libzstd.so.1-with-.patch
 0007-NextBSD-swapon-8-swap-on-a-local-swap-file-directly-.patch
 0008-NextBSD-dumpon-8-savecore-8-kernel-dumps-to-a-regula.patch
+0009-NextBSD-virtual_oss-build-and-install-the-Bluetooth-.patch
