@@ -16,32 +16,37 @@ an option.
   /usr/lib/virtual_oss/voss_bt.so, next to voss_null.so and
   voss_oss.so. SBC only: HAVE_LIBAV is not defined, so there is no
   AAC and no ffmpeg dependency.
-- lib/Makefile orders virtual_oss after libbluetooth and libsdp, which
+- Makefile.inc1 adds lib/libbluetooth and lib/libsdp, which voss_bt.so
+  links, to _prebuild_libs. buildworld builds all of lib/ before it
+  installs any of it, so without this they are not in the sysroot when
   voss_bt.so links.
 - virtual_oss loads the bt backend from /usr instead of /usr/local.
   virtual_bt_speaker already uses /usr/lib/virtual_oss.
 
 Carried out-of-tree for NextBSD.
 ---
- lib/Makefile                            | 3 +++
+ Makefile.inc1                           | 6 ++++++
  lib/virtual_oss/Makefile                | 1 +
  usr.sbin/virtual_oss/virtual_oss/main.c | 4 ++--
- 3 files changed, 6 insertions(+), 2 deletions(-)
+ 3 files changed, 9 insertions(+), 2 deletions(-)
 
-diff --git a/lib/Makefile b/lib/Makefile
-index 6e2ff63..3e7d317 100644
---- a/lib/Makefile
-+++ b/lib/Makefile
-@@ -157,6 +157,9 @@ SUBDIR_DEPEND_libpcap= ofed
+diff --git a/Makefile.inc1 b/Makefile.inc1
+index 2c79a8c..262cd7d 100644
+--- a/Makefile.inc1
++++ b/Makefile.inc1
+@@ -3401,6 +3401,12 @@ gnu/lib/libdialog__L: lib/msun__L lib/ncurses/tinfo__L lib/ncurses/ncurses__L
+ _prebuild_libs+= lib/libregex
  .endif
- SUBDIR_DEPEND_nss_tacplus= libtacplus
- SUBDIR_DEPEND_virtual_oss= libsamplerate
+ 
++# lib/virtual_oss/bt (voss_bt.so) links libbluetooth and libsdp, and all of
++# lib/ is built before any of it is installed.
 +.if ${MK_BLUETOOTH} != "no"
-+SUBDIR_DEPEND_virtual_oss+= libbluetooth libsdp
++_prebuild_libs+= lib/libbluetooth lib/libsdp
 +.endif
- 
- # NB: keep these sorted by MK_* knobs
- 
++
+ lib/libgeom__L: lib/libexpat__L lib/libsbuf__L
+ lib/libkldelf__L: lib/libelf__L
+ lib/libkvm__L: lib/libelf__L
 diff --git a/lib/virtual_oss/Makefile b/lib/virtual_oss/Makefile
 index e6cb5fb..c41ab41 100644
 --- a/lib/virtual_oss/Makefile
