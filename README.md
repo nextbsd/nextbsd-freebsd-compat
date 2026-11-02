@@ -39,7 +39,12 @@ series keeps the releng/15.1 code paths that upstream gates on
 `sys/sys/param.h` again, so world builds correctly once NextBSD sets
 `__FreeBSD_version` to 2700000 (nextbsd/nextbsd-kernel#376). It also makes
 base's zstd a public library, `libzstd.so.1` with its headers and
-`libzstd.pc` (nextbsd/nextbsd#611). See
+`libzstd.pc` (nextbsd/nextbsd#611). It builds
+virtual_oss's Bluetooth backend `voss_bt.so`, and leaves out the FreeBSD
+Bluetooth daemons and tools (`hcsecd`, `sdpd`, `bthidd`, `hccontrol`,
+`virtual_bt_speaker` and the rest) with their rc.d scripts, configuration
+and man pages: `bluetoothd` and `bluetooth(8)` replace them
+(nextbsd/nextbsd#473). See
 [`patches/README.md`](patches/README.md).
 
 A `make.conf` shim bakes rtld's compiled-in default search path
