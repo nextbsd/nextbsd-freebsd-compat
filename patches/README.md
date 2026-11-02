@@ -96,3 +96,14 @@ so savecore cannot clear its header while it is configured; savecore says
 to run it before `dumpon`, or after `dumpon -r`. On a kernel without the
 file dumper, dumpon says the kernel cannot dump to a regular file; on ZFS
 the kernel refuses the file. Devices and netdump are unchanged.
+
+## `0009`: virtual_oss Bluetooth backend
+
+releng/15.1's `lib/virtual_oss` builds only the `null` and `oss` backends,
+so `voss_bt.so` was missing: `virtual_oss -P /dev/bluetooth/<addr>` exited,
+and `virtual_bt_speaker` exited at startup because it dlsyms its AVDTP
+acceptor from that file (nextbsd/nextbsd#485). `0009` builds `bt` when
+`MK_BLUETOOTH` is on, installing `/usr/lib/virtual_oss/voss_bt.so` (SBC
+only; no `HAVE_LIBAV`, so no AAC or ffmpeg). `lib/Makefile` orders
+`virtual_oss` after `libbluetooth` and `libsdp`, which it links, and
+`virtual_oss` loads the `bt` backend from `/usr` instead of `/usr/local`.
