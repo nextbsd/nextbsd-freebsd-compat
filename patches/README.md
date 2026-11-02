@@ -108,3 +108,18 @@ only; no `HAVE_LIBAV`, so no AAC or ffmpeg). `Makefile.inc1` adds
 `lib/libbluetooth` and `lib/libsdp`, which it links, to `_prebuild_libs`,
 because buildworld builds all of `lib/` before installing any of it into
 the sysroot. `virtual_oss` loads the `bt` backend from `/usr` instead of `/usr/local`.
+
+## `0010`: no FreeBSD Bluetooth daemons or tools
+
+`bluetoothd` and `bluetooth(8)` from `nextbsd-userland` are NextBSD's only
+Bluetooth userland (E16, nextbsd/nextbsd#473): they do controller setup,
+pairing, SDP, HID, firmware download and the A2DP sink. `0010` stops world
+building the FreeBSD programs that did those jobs, so they never reach the
+stage: `usr.sbin/bluetooth` (`hcsecd`, `sdpd`, `bthidd`, `bthidcontrol`,
+`iwmbtfw`, `rtlbtfw`, `ath3kfw`, `bcmfw`, `hccontrol`, `l2control`, `l2ping`,
+`sdpcontrol`, `btpand`, `rfcomm_pppd`, `bluetooth-config`), `usr.bin/bluetooth`
+(`bthost`, `btsockstat`, `rfcomm_sppd`), `virtual_bt_speaker`, and the
+Bluetooth rc.d scripts. Their man pages and their `/etc/bluetooth`,
+`/etc/defaults` and `/etc/devd` configuration go with them. `MK_BLUETOOTH`
+stays on, so `libbluetooth`, `libsdp`, `ng_bluetooth(4)`, the netgraph
+Bluetooth headers and `0009`'s `voss_bt.so` are still built.

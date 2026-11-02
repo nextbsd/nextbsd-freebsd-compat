@@ -1,0 +1,96 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pkgdemon <jpm820@gmail.com>
+Date: Mon, 2 Nov 2026 08:40:18 -0600
+Subject: [PATCH] NextBSD: do not build the FreeBSD Bluetooth daemons and tools
+
+bluetoothd and bluetooth(8), from nextbsd-userland, are NextBSD's only
+Bluetooth userland, as on macOS (nextbsd/nextbsd#473). They take over
+controller setup, pairing and link keys, SDP, HID, firmware download
+and the A2DP sink, so the FreeBSD programs that did those jobs are
+dead weight in the base.
+
+- usr.sbin/Makefile drops usr.sbin/bluetooth: ath3kfw, bcmfw,
+  bluetooth-config, bthidcontrol, bthidd, btpand, hccontrol, hcsecd,
+  iwmbtfw, l2control, l2ping, rfcomm_pppd, rtlbtfw, sdpcontrol and
+  sdpd, with their man pages and their hcsecd.conf,
+  defaults/bluetooth.device.conf and devd configuration.
+- usr.bin/Makefile drops usr.bin/bluetooth: bthost, btsockstat and
+  rfcomm_sppd, with their man pages.
+- usr.sbin/virtual_oss/Makefile drops virtual_bt_speaker.
+- libexec/rc/rc.d/Makefile drops the bluetooth, bthidd, hcsecd,
+  rfcomm_pppd_server, sdpd and ubthidhci rc.d scripts.
+
+MK_BLUETOOTH stays on: libbluetooth, libsdp, their man pages,
+ng_bluetooth(4), the netgraph Bluetooth headers and virtual_oss's
+voss_bt.so are still built.
+
+Carried out-of-tree for NextBSD.
+---
+ libexec/rc/rc.d/Makefile      | 9 +--------
+ usr.bin/Makefile              | 2 +-
+ usr.sbin/Makefile             | 2 +-
+ usr.sbin/virtual_oss/Makefile | 2 +-
+ 4 files changed, 4 insertions(+), 11 deletions(-)
+
+diff --git a/libexec/rc/rc.d/Makefile b/libexec/rc/rc.d/Makefile
+index f25338c..a384b6f 100644
+--- a/libexec/rc/rc.d/Makefile
++++ b/libexec/rc/rc.d/Makefile
+@@ -115,14 +115,7 @@ BLOCKLISTPACKAGE=		blocklist
+ BLOCKLIST=	blacklistd \
+ 		blocklistd
+ 
+-CONFGROUPS.${MK_BLUETOOTH}+=	BLUETOOTH
+-BLUETOOTHPACKAGE=		bluetooth
+-BLUETOOTH=	bluetooth \
+-		bthidd \
+-		hcsecd \
+-		rfcomm_pppd_server \
+-		sdpd \
+-		ubthidhci
++# NextBSD: no Bluetooth rc.d scripts; launchd starts bluetoothd.
+ 
+ CONFGROUPS.${MK_BOOTPARAMD}+=	BOOTPARAMD
+ BOOTPARAMD=	bootparams
+diff --git a/usr.bin/Makefile b/usr.bin/Makefile
+index 6d703c1..817e984 100644
+--- a/usr.bin/Makefile
++++ b/usr.bin/Makefile
+@@ -184,7 +184,7 @@ SUBDIR=	alias \
+ 
+ SUBDIR.${MK_ACCT}+=	lastcomm
+ SUBDIR.${MK_AT}+=	at
+-SUBDIR.${MK_BLUETOOTH}+=	bluetooth
++# NextBSD: bluetooth(8) replaces bthost, btsockstat and rfcomm_sppd.
+ SUBDIR.${MK_BSD_CPIO}+=	cpio
+ SUBDIR.${MK_CALENDAR}+=	calendar
+ .if ${MK_CLANG} != "no" || ${MK_LLVM_BINUTILS} != "no" || \
+diff --git a/usr.sbin/Makefile b/usr.sbin/Makefile
+index 3d3a844..1164a23 100644
+--- a/usr.sbin/Makefile
++++ b/usr.sbin/Makefile
+@@ -122,7 +122,7 @@ SUBDIR.${MK_BLACKLIST}+=	blacklistctl
+ SUBDIR.${MK_BLACKLIST}+=	blacklistd
+ SUBDIR.${MK_BLOCKLIST}+=	blocklistctl
+ SUBDIR.${MK_BLOCKLIST}+=	blocklistd
+-SUBDIR.${MK_BLUETOOTH}+=	bluetooth
++# NextBSD: bluetoothd replaces the FreeBSD Bluetooth daemons and tools.
+ SUBDIR.${MK_BOOTPARAMD}+=	bootparamd
+ SUBDIR.${MK_BSDINSTALL}+=	bsdinstall
+ SUBDIR.${MK_BSNMP}+=	bsnmpd
+diff --git a/usr.sbin/virtual_oss/Makefile b/usr.sbin/virtual_oss/Makefile
+index a7d6ad8..2020bc1 100644
+--- a/usr.sbin/virtual_oss/Makefile
++++ b/usr.sbin/virtual_oss/Makefile
+@@ -3,7 +3,7 @@
+ SUBDIR+= virtual_oss_cmd \
+ 	 virtual_oss
+ 
+-SUBDIR.${MK_BLUETOOTH}+= virtual_bt_speaker
++# NextBSD: bluetoothd is the A2DP sink; virtual_bt_speaker is not built.
+ 
+ SUBDIR_PARALLEL=
+ 
+-- 
+2.54.0 (Apple Git-157)
+
