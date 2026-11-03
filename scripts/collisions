@@ -60,3 +60,19 @@
 # iso3166.tab, which the new one reads exactly as the old one did.
 /usr/sbin/tzsetup                     # NextBSD tzsetup(8), in the installer's look
 /usr/share/man/man8/tzsetup.8.gz      # NextBSD tzsetup(8)
+
+# reboot, halt, shutdown and poweroff (E17 S1, nextbsd/nextbsd-userland#237).
+# The userland ships Apple's, from system_cmds-1042.120.1, at the same paths.
+# They hand the request to launchd (PID 1) with the init(8) signal it honours,
+# so launchd stops its jobs in order before it calls reboot(2); the base's
+# reboot and halt kill every process and call reboot(2) themselves.
+# /sbin/nextboot stays: it is the base's reboot binary under its own name,
+# and only writes /boot/nextboot.conf.
+/sbin/reboot                          # system_cmds reboot(8)
+/sbin/halt                            # link to reboot; powers off, as on Darwin
+/sbin/shutdown                        # system_cmds shutdown(8)
+/sbin/poweroff                        # link to shutdown (shutdown -p now)
+/usr/share/man/man8/reboot.8.gz       # system_cmds reboot(8)
+/usr/share/man/man8/halt.8.gz         # link
+/usr/share/man/man8/shutdown.8.gz     # system_cmds shutdown(8)
+/usr/share/man/man8/poweroff.8.gz     # link
