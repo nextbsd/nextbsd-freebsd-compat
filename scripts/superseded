@@ -71,6 +71,14 @@
 /usr/share/man/man8/fastboot.8.gz
 /usr/share/man/man8/fasthalt.8.gz
 
+# powerd(8), FreeBSD's CPU-frequency daemon: pmconfigd owns the CPU power
+# policy, as powerd does on macOS. It sets the processor's energy/performance
+# preference from the AC or battery profile (hwpstate_intel(4)), with no
+# polling loop (nextbsd/nextbsd-userland#231). No launchd job ever ran the
+# base's powerd.
+/usr/sbin/powerd                    # pmconfigd (org.nextbsd.powerd)
+/usr/share/man/man8/powerd.8.gz
+
 # BlocksRuntime SHADOW (library, not a tool; NOT an exact-path collision, so the
 # collision guard misses it). FreeBSD ships libBlocksRuntime in /usr/lib; Apple
 # ships the canonical one in /usr/lib/system. rtld searches /usr/lib BEFORE
