@@ -79,7 +79,7 @@ that would be dead/conflicting weight, so the base drops them:
 | the BSD LPD print system: `lp` `lpr` `lpq` `lprm` `lpc` `lpd` `chkprintcap` `pac` `lptest`, `/usr/libexec/lpr`, their man pages, `printcap(5)`, `hosts.lpd(5)` | Apple's CUPS (`cupsd`, its `lp`/`lpr`/`lpq`/`lprm`/`lpc`) in [`nextbsd-printing-support`](https://github.com/nextbsd/nextbsd-printing-support) |
 | FreeBSD's pkg(7) bootstrap: `/usr/sbin/pkg`, `pkg.7`, its `pkg.freebsd.org` key in `/usr/share/keys/pkg/trusted/` | the real pkg(8) in base (`/usr/sbin/pkg`), from [`nextbsd-contrib`](https://github.com/nextbsd/nextbsd-contrib) (`src/pkg`) |
 | `/sbin/fastboot` `/sbin/fasthalt` and their man pages | `reboot` / `halt` (Apple's, from `system_cmds`, which hand the request to launchd) |
-| `/usr/sbin/powerd` and `powerd.8` (FreeBSD's CPU-frequency daemon) | `pmconfigd` (`org.nextbsd.powerd`), which sets the CPU's energy/performance preference by power source |
+| `/usr/sbin/powerd` and `powerd.8` (FreeBSD's CPU-frequency daemon) | Apple's `powerd` (`/System/Library/CoreServices/powerd.bundle/powerd`, job `org.nextbsd.powerd`), which sets the CPU's energy/performance preference by power source; the userland ships its own `powerd.8` |
 | `libBlocksRuntime.so{,.0}` / `.a` (`/usr/lib`) | Apple's canonical copy in `/usr/lib/system` (base copy shadows it and breaks ObjC — missing `_Block_use_RR2`) |
 
 Every listed path is existence-asserted: a stale entry (base stopped shipping
