@@ -61,6 +61,16 @@
 /usr/share/man/man7/pkg.7.gz                          # the bootstrap's page; pkg(8) has its own
 /usr/share/keys/pkg/trusted/pkg.freebsd.org.2013102301  # the bootstrap's pkg.FreeBSD.org key
 
+# fastboot and fasthalt: more names for the base's reboot binary. The userland
+# replaces /sbin/reboot and /sbin/halt with Apple's, which hand the request to
+# launchd (scripts/collisions, nextbsd/nextbsd-userland#237); these two would
+# be the base's reboot under other names, killing every process instead of
+# going through launchd. Darwin has neither name.
+/sbin/fastboot                      # use reboot(8)
+/sbin/fasthalt                      # use halt(8)
+/usr/share/man/man8/fastboot.8.gz
+/usr/share/man/man8/fasthalt.8.gz
+
 # BlocksRuntime SHADOW (library, not a tool; NOT an exact-path collision, so the
 # collision guard misses it). FreeBSD ships libBlocksRuntime in /usr/lib; Apple
 # ships the canonical one in /usr/lib/system. rtld searches /usr/lib BEFORE
