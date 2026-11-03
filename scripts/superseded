@@ -71,13 +71,20 @@
 /usr/share/man/man8/fastboot.8.gz
 /usr/share/man/man8/fasthalt.8.gz
 
-# powerd(8), FreeBSD's CPU-frequency daemon: pmconfigd owns the CPU power
-# policy, as powerd does on macOS. It sets the processor's energy/performance
+# powerd(8), FreeBSD's CPU-frequency daemon. Apple's powerd owns the CPU power
+# policy, as it does on macOS: it sets the processor's energy/performance
 # preference from the AC or battery profile (hwpstate_intel(4)), with no
 # polling loop (nextbsd/nextbsd-userland#231). No launchd job ever ran the
-# base's powerd.
-/usr/sbin/powerd                    # pmconfigd (org.nextbsd.powerd)
-/usr/share/man/man8/powerd.8.gz
+# base's powerd. The userland installs Apple's daemon where macOS does,
+# /System/Library/CoreServices/powerd.bundle/powerd (job org.nextbsd.powerd,
+# nextbsd/nextbsd-userland#240), so /usr/sbin/powerd stays empty.
+#
+# The userland also ships its own powerd.8 at the base page's path. That page
+# stays here rather than in scripts/collisions, so the base drops it
+# unconditionally: a base built before the userland publishes the page then
+# never carries a copy that pkg would see as having two owners.
+/usr/sbin/powerd                    # Apple's powerd, in powerd.bundle
+/usr/share/man/man8/powerd.8.gz     # the userland's powerd(8)
 
 # BlocksRuntime SHADOW (library, not a tool; NOT an exact-path collision, so the
 # collision guard misses it). FreeBSD ships libBlocksRuntime in /usr/lib; Apple
