@@ -44,7 +44,8 @@ virtual_oss's Bluetooth backend `voss_bt.so`, and leaves out the FreeBSD
 Bluetooth daemons and tools (`hcsecd`, `sdpd`, `bthidd`, `hccontrol`,
 `virtual_bt_speaker` and the rest) with their rc.d scripts, configuration
 and man pages: `bluetoothd` and `bluetooth(8)` replace them
-(nextbsd/nextbsd#473). See
+(nextbsd/nextbsd#473). It carries the loader's graphical-boot patches
+(`loader.efi` and `/boot/lua` are built here; nextbsd/nextbsd#542). See
 [`patches/README.md`](patches/README.md).
 
 A `make.conf` shim bakes rtld's compiled-in default search path

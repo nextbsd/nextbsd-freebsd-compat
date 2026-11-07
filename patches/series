@@ -8,3 +8,4 @@
 0008-NextBSD-dumpon-8-savecore-8-kernel-dumps-to-a-regula.patch
 0009-NextBSD-virtual_oss-build-and-install-the-Bluetooth-.patch
 0010-NextBSD-do-not-build-the-FreeBSD-Bluetooth-daemons-an.patch
+0011-NextBSD-loader-boot-video-mode-graphics-or-text-deci.patch
