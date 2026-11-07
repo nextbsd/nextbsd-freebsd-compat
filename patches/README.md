@@ -152,3 +152,14 @@ or changes the mode.
 CI's OVMF/AAVMF list the UART in ConOut (the loader prints
 `Console: efi (0x20000000)`, `RB_MULTIPLE`), so CI stays in text mode and
 its serial output is unchanged.
+
+## `0012`: exact-RGB fill; no GOP SetMode to the same mode
+
+Primitives for the boot splash (nextbsd/nextbsd-freebsd-compat#78).
+`gfx.fb_fill_rgb(r, g, b [, x1, y1, x2, y2])` fills the framebuffer, or a
+rectangle clipped to it, with an exact colour as one GOP `VideoFill`.
+`gfx.fb_drawrect` only paints the 16-colour teken palette, and scaling a
+PNG to full screen needs about 33 MB of loader heap at 4K; the fill
+allocates nothing. `gop_autoresize()` (`efi-autoresizecons`) no longer
+calls `SetMode()` when the best mode is already the current one, because
+`SetMode()` clears the screen to black even then.
