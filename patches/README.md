@@ -123,3 +123,32 @@ Bluetooth rc.d scripts. Their man pages and their `/etc/bluetooth`,
 `/etc/defaults` and `/etc/devd` configuration go with them. `MK_BLUETOOTH`
 stays on, so `libbluetooth`, `libsdp`, `ng_bluetooth(4)`, the netgraph
 Bluetooth headers and `0009`'s `voss_bt.so` are still built.
+
+## `0011`: loader boot-video mode
+
+The first loader patch for NextBSD's graphical boot (nextbsd/nextbsd#542,
+nextbsd/nextbsd-freebsd-compat#77). `loader.efi` takes on boot.efi's role
+and decides xnu's `Boot_Video` `v_display` once, in `main()` before the
+console is probed:
+
+- **graphics** (`GRAPHICS_MODE`, 1) when ConOut lists no serial port, the
+  load options have none of `-v`, `-s`, `-a`, `-h`, `-D`, and there is a
+  GOP framebuffer;
+- **text** (`FB_TEXT_MODE`, 2) otherwise: the stock loader, unchanged.
+
+In graphics mode no loader text reaches the screen. `efi_cons_putchar()`
+keeps it in a 16 KB replay ring and teken draws nothing, so the screen
+belongs to the boot splash; comconsole output is never kept. The loader
+drops to text and replays the ring when the boot flags or `loader.conf`
+ask for verbose, single-user or a serial console (`boot_verbose`,
+`boot_single`, `boot_askname`, `boot_serial`, `boot_multicons`, or
+`comconsole` in `console`), when something must wait for the user (the
+beastie menu, a password or GELI prompt), and on every error path: the
+`OK` prompt after a failed boot, `interactive_interrupt()` and a loader
+panic. No key leaves graphics mode, as on Darwin, so autoboot boots at
+once in that mode. `boot-video [status | is-graphics | text]` reports
+or changes the mode.
+
+CI's OVMF/AAVMF list the UART in ConOut (the loader prints
+`Console: efi (0x20000000)`, `RB_MULTIPLE`), so CI stays in text mode and
+its serial output is unchanged.
