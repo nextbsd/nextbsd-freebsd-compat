@@ -163,3 +163,23 @@ PNG to full screen needs about 33 MB of loader heap at 4K; the fill
 allocates nothing. `gop_autoresize()` (`efi-autoresizecons`) no longer
 calls `SetMode()` when the best mode is already the current one, because
 `SetMode()` clears the screen to black even then.
+
+## `0013`: the loader → kernel `boot_video` record
+
+The loader hands the kernel one record that describes the screen it
+left, as boot.efi hands xnu its `Boot_Video`
+(nextbsd/nextbsd-freebsd-compat#80; the kernel side is
+nextbsd/nextbsd-kernel#407). `stand/common/nbsd_boot_video.h` is a
+byte-identical copy of nextbsd-kernel's
+`src-overlay/sys/sys/nbsd_boot_video.h`; keep the two in step.
+
+- Every UEFI boot gets a `MODINFOMD_NBSD_BOOT_VIDEO` (0x2001) record:
+  `v_display` (1 graphics, 2 text), the GOP framebuffer's base, size,
+  row bytes and depth, `HIDPI` at 200 ppi or more, the
+  `bootsplash_style` colours, and in graphics mode the logo and spinner
+  rectangles. `MODINFOMD_EFI_FB` stays.
+- In graphics mode NextBSD's logo (`/boot/images/nextbsd-logo.png`, or
+  `@2x` at scale 2) goes to the kernel as the stock `MODINFOMD_SPLASH`.
+  The loader no longer reads `splash=` or `shutdown_splash=`, so the
+  FreeBSD logo never reaches the kernel, and the "Loading splash ok"
+  lines are gone.
