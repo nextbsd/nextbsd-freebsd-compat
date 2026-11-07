@@ -1,0 +1,370 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pkgdemon <jpm820@gmail.com>
+Date: Sat, 7 Nov 2026 13:04:25 -0600
+Subject: [PATCH] NextBSD: loader hands the kernel a boot_video record and its
+ logo
+
+The loader -> kernel half of NextBSD's graphical boot (nextbsd/nextbsd#542,
+E19 audit 1 F2 and D4), the way boot.efi hands xnu its Boot_Video.
+
+- stand/common/nbsd_boot_video.h is a byte-identical copy of
+  nextbsd-kernel's src-overlay/sys/sys/nbsd_boot_video.h:
+  struct nbsd_boot_video, version 1, MODINFOMD_NBSD_BOOT_VIDEO 0x2001
+  (the first number of the NextBSD range 0x2000-0x2fff), and the shared
+  geometry formulas.
+- bi_load_efi_data() adds the record on every UEFI boot, next to
+  MODINFOMD_EFI_FB (which stays for vt_efifb). v_display is GRAPHICS (1)
+  or TEXT (2) from the loader's boot-video mode; base, width, height,
+  rowBytes and depth come from the GOP framebuffer; v_flags has HIDPI
+  when the EDID density is at least 200 ppi; bg_rgb/fg_rgb come from
+  bootsplash_style (black, also when unset: 000000/FFFFFF; grey:
+  5F6770/000000). In graphics mode the logo and spinner rectangles
+  follow the header's formulas; otherwise they are zero.
+- build_splash_module() hands over NextBSD's logo,
+  /boot/images/nextbsd-logo.png (or @2x at scale 2), as the stock
+  MODINFOMD_SPLASH payload, only in graphics mode. It no longer reads
+  splash= or shutdown_splash=, so the FreeBSD logo never reaches the
+  kernel, and the "Loading splash ok" / "Loading shutdown splash ok"
+  lines are gone.
+- The style table, scale rule, logo path and geometry are shared
+  functions in gfx_fb.c, so the loader's splash painter and the record
+  describe the same pixels.
+
+Carried out-of-tree for NextBSD.
+---
+ stand/common/gfx_fb.c          | 160 +++++++++++++++++++++++++++------
+ stand/common/gfx_fb.h          |  17 ++++
+ stand/common/nbsd_boot_video.h |  79 ++++++++++++++++
+ stand/efi/loader/bootinfo.c    |   3 +
+ 4 files changed, 232 insertions(+), 27 deletions(-)
+ create mode 100644 stand/common/nbsd_boot_video.h
+
+diff --git a/stand/common/gfx_fb.c b/stand/common/gfx_fb.c
+index 7f71ccd..0e5e2d7 100644
+--- a/stand/common/gfx_fb.c
++++ b/stand/common/gfx_fb.c
+@@ -95,6 +95,7 @@
+ #include <sys/endian.h>
+ #include <pnglite.h>
+ #include <bootstrap.h>
++#include "nbsd_boot_video.h"
+ #include <lz4.h>
+ #if defined(EFI)
+ #include <efi.h>
+@@ -3132,37 +3133,108 @@ build_font_module(vm_offset_t addr)
+ 	return (addr);
+ }
+ 
++/*
++ * NextBSD boot splash: the style table.  bootsplash_style is "black"
++ * (also when unset) or "grey"; bg is the background and fg the spinner
++ * colour, 0x00RRGGBB.  "grey" is LoginWindow's root colour exactly.
++ */
++void
++gfx_boot_splash_style(uint32_t *bg, uint32_t *fg)
++{
++	const char *style;
++
++	style = getenv("bootsplash_style");
++	if (style != NULL && strcmp(style, "grey") == 0) {
++		*bg = 0x5F6770;
++		*fg = 0x000000;
++	} else {
++		*bg = 0x000000;
++		*fg = 0xFFFFFF;
++	}
++}
++
++/* v_flags for this screen: HIDPI from the EDID density (Darwin's UIScale). */
++uint32_t
++gfx_boot_splash_flags(void)
++{
++	if (gfx_state.tg_fb_type != FB_TEXT &&
++	    gfx_get_ppi() >= NBSD_SPLASH_HIDPI_PPI)
++		return (NBSD_BOOT_VIDEO_HIDPI);
++	return (0);
++}
++
++/* The splash scale: 2 with HIDPI, else 2 from 1440 lines up, else 1. */
++uint32_t
++gfx_boot_splash_scale(uint32_t flags, uint32_t height)
++{
++	if ((flags & NBSD_BOOT_VIDEO_HIDPI) != 0 || height >= 1440)
++		return (2);
++	return (1);
++}
++
++const char *
++gfx_boot_splash_logo(uint32_t scale)
++{
++	return (scale == 2 ? NBSD_SPLASH_LOGO_2X : NBSD_SPLASH_LOGO);
++}
++
++/*
++ * The logo and spinner rectangles for bv's screen, with the formulas in
++ * nbsd_boot_video.h: the logo centred with its vertical centre at
++ * height / 2; the spinner, 40 px per scale step, centred below it with
++ * its top 40% of the logo height under the logo's bottom edge.
++ */
++void
++gfx_boot_splash_geometry(struct nbsd_boot_video *bv, uint32_t logo_w,
++    uint32_t logo_h)
++{
++	uint32_t scale;
++
++	scale = gfx_boot_splash_scale(bv->v_flags, bv->v_height);
++	bv->logo_w = logo_w;
++	bv->logo_h = logo_h;
++	bv->logo_x = (bv->v_width - logo_w) / 2;
++	bv->logo_y = bv->v_height / 2 - logo_h / 2;
++	bv->spin_d = 40 * scale;
++	bv->spin_x = (bv->v_width - bv->spin_d) / 2;
++	bv->spin_y = bv->logo_y + logo_h + (logo_h * 40) / 100;
++}
++
++#if defined(EFI)
++/* The logo handed to the kernel as MODINFOMD_SPLASH, for the record. */
++static uint32_t boot_splash_logo_w, boot_splash_logo_h;
++
++/*
++ * Hand the kernel NextBSD's boot logo as MODINFOMD_SPLASH (the stock
++ * struct splash_info + RGBA pixels), so it can repaint the splash after
++ * the console moves to another framebuffer.  Only in boot-video
++ * graphics mode, and only the startup splash: the stock splash= and
++ * shutdown_splash= variables (the FreeBSD logo) are no longer read.
++ */
+ vm_offset_t
+ build_splash_module(vm_offset_t addr, int type)
+ {
+ 	struct preloaded_file *fp;
+ 	struct splash_info si;
+-	const char *splash;
++	uint32_t scale;
+ 	png_t png;
+ 	uint64_t splashp;
+-	int error;
+ 
+-	/* We can't load first */
+-	if ((file_findfile(NULL, NULL)) == NULL) {
+-		printf("Can not load splash module: %s\n",
+-		    "the kernel is not loaded");
++	if (type != SPLASH_STARTUP ||
++	    efi_boot_video_display() != GRAPHICS_MODE ||
++	    gfx_state.tg_fb_type == FB_TEXT)
+ 		return (addr);
+-	}
+ 
+ 	fp = file_findfile(NULL, md_kerntype);
+ 	if (fp == NULL)
+-		panic("can't find kernel file");
+-
+-	if (type == SPLASH_STARTUP)
+-		splash = getenv("splash");
+-	if (type == SPLASH_SHUTDOWN)
+-		splash = getenv("shutdown_splash");
+-
+-	if (splash == NULL)
+ 		return (addr);
+ 
+-	/* Parse png */
+-	if ((error = png_open(&png, splash)) != PNG_NO_ERROR) {
++	scale = gfx_boot_splash_scale(gfx_boot_splash_flags(),
++	    gfx_state.tg_fb.fb_height);
++	if (png_open(&png, gfx_boot_splash_logo(scale)) != PNG_NO_ERROR)
++		return (addr);
++	if (png.color_type != PNG_TRUECOLOR_ALPHA) {
++		png_close(&png);
+ 		return (addr);
+ 	}
+ 
+@@ -3175,16 +3247,50 @@ build_splash_module(vm_offset_t addr, int type)
+ 
+ 	/* Copy the bitmap. */
+ 	addr += archsw.arch_copyin(png.image, addr, png.png_datalen);
++	file_addmetadata(fp, MODINFOMD_SPLASH, sizeof(splashp), &splashp);
+ 
+-	if (type == SPLASH_STARTUP) {
+-		printf("Loading splash ok\n");
+-		file_addmetadata(fp, MODINFOMD_SPLASH,
+-		    sizeof(splashp), &splashp);
+-	}
+-	if (type == SPLASH_SHUTDOWN) {
+-		printf("Loading shutdown splash ok\n");
+-		file_addmetadata(fp, MODINFOMD_SHTDWNSPLASH,
+-		    sizeof(splashp), &splashp);
+-	}
++	boot_splash_logo_w = png.width;
++	boot_splash_logo_h = png.height;
++	png_close(&png);
+ 	return (addr);
+ }
++
++/*
++ * The NextBSD loader -> kernel boot_video record (MODINFOMD_NBSD_BOOT_VIDEO,
++ * nbsd_boot_video.h): xnu's Boot_Video plus the splash geometry.  Emitted
++ * on every UEFI boot, with v_display = NBSD_BOOT_VIDEO_TEXT in text mode.
++ * The logo and spinner rectangles are filled only when the logo went to
++ * the kernel as MODINFOMD_SPLASH; zero means "not given".
++ */
++void
++gfx_boot_video_metadata(struct preloaded_file *kfp)
++{
++	struct nbsd_boot_video bv;
++
++	memset(&bv, 0, sizeof(bv));
++	bv.version = NBSD_BOOT_VIDEO_VERSION;
++	bv.v_display = efi_boot_video_display() == GRAPHICS_MODE ?
++	    NBSD_BOOT_VIDEO_GRAPHICS : NBSD_BOOT_VIDEO_TEXT;
++	if (gfx_state.tg_fb_type != FB_TEXT) {
++		bv.v_baseAddr = gfx_state.tg_fb.fb_addr;
++		bv.v_width = gfx_state.tg_fb.fb_width;
++		bv.v_height = gfx_state.tg_fb.fb_height;
++		bv.v_depth = gfx_state.tg_fb.fb_bpp;
++		bv.v_rowBytes = gfx_state.tg_fb.fb_stride *
++		    (roundup2(gfx_state.tg_fb.fb_bpp, 8) >> 3);
++		bv.v_flags = gfx_boot_splash_flags();
++	}
++	gfx_boot_splash_style(&bv.bg_rgb, &bv.fg_rgb);
++	if (bv.v_display == NBSD_BOOT_VIDEO_GRAPHICS &&
++	    boot_splash_logo_w != 0 && boot_splash_logo_h != 0)
++		gfx_boot_splash_geometry(&bv, boot_splash_logo_w,
++		    boot_splash_logo_h);
++	file_addmetadata(kfp, MODINFOMD_NBSD_BOOT_VIDEO, sizeof(bv), &bv);
++}
++#else
++vm_offset_t
++build_splash_module(vm_offset_t addr, int type __unused)
++{
++	return (addr);
++}
++#endif
+diff --git a/stand/common/gfx_fb.h b/stand/common/gfx_fb.h
+index 239c685..83cf6eb 100644
+--- a/stand/common/gfx_fb.h
++++ b/stand/common/gfx_fb.h
+@@ -268,6 +268,23 @@ void gfx_fb_setpixel(uint32_t, uint32_t);
+ void gfx_fb_drawrect(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
+ void gfx_term_drawrect(uint32_t, uint32_t, uint32_t, uint32_t);
+ int gfx_fb_fill_rgb(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
++
++/*
++ * NextBSD boot splash (E19): the style, scale, logo asset and geometry
++ * shared by the loader's splash painter and the boot_video record handed
++ * to the kernel (nbsd_boot_video.h), so all of them paint the same pixels.
++ */
++#define	NBSD_SPLASH_LOGO	"/boot/images/nextbsd-logo.png"
++#define	NBSD_SPLASH_LOGO_2X	"/boot/images/nextbsd-logo@2x.png"
++#define	NBSD_SPLASH_HIDPI_PPI	200	/* EDID density for 2x (HiDPI) */
++struct nbsd_boot_video;
++struct preloaded_file;
++void gfx_boot_splash_style(uint32_t *, uint32_t *);
++uint32_t gfx_boot_splash_flags(void);
++uint32_t gfx_boot_splash_scale(uint32_t, uint32_t);
++const char *gfx_boot_splash_logo(uint32_t);
++void gfx_boot_splash_geometry(struct nbsd_boot_video *, uint32_t, uint32_t);
++void gfx_boot_video_metadata(struct preloaded_file *);
+ void gfx_fb_line(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
+ void gfx_fb_bezier(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t,
+ 	uint32_t);
+diff --git a/stand/common/nbsd_boot_video.h b/stand/common/nbsd_boot_video.h
+new file mode 100644
+index 0000000..0aef4a0
+--- /dev/null
++++ b/stand/common/nbsd_boot_video.h
+@@ -0,0 +1,79 @@
++/*
++ * NextBSD loader -> kernel boot video record (E19, nextbsd-kernel#407).
++ *
++ * The loader plays boot.efi's role: it decides once whether this boot is
++ * graphical or text, paints the splash when it is graphical, and hands the
++ * kernel one record that describes the screen it left behind, the way
++ * boot.efi hands xnu its Boot_Video. The kernel builds PE_state.video
++ * (<sys/pexpert.h>) from it at cninit.
++ *
++ * Transport: a module metadata entry of type MODINFOMD_NBSD_BOOT_VIDEO on
++ * the kernel's preload record, read with
++ *
++ *   MD_FETCH(preload_kmdp, MODINFOMD_NBSD_BOOT_VIDEO, struct nbsd_boot_video *)
++ *
++ * (or preload_search_info(kmdp, MODINFO_METADATA | MODINFOMD_NBSD_BOOT_VIDEO)).
++ * 0x2001 is the first number of the NextBSD-reserved MODINFOMD range,
++ * 0x2000-0x2fff: FreeBSD uses 0x0001-0x00ff for the MI types, 0x1000-0x1fff
++ * for the MD types (<machine/metadata.h>) and 0x4001 | MODINFOMD_NOCOPY for
++ * the dependency list, so nothing upstream collides on amd64 or arm64. The
++ * MODINFOMD_NOCOPY bit is clear: the record is copied to the kernel.
++ *
++ * The loader emits the record on every UEFI boot, in TEXT mode too (with
++ * v_display = NBSD_BOOT_VIDEO_TEXT). The logo itself travels separately, as
++ * the stock MODINFOMD_SPLASH image (struct splash_info + pixels), and only
++ * in GRAPHICS mode. A kernel that finds no record falls back to
++ * MODINFOMD_EFI_FB and computes the geometry below itself, so both sides
++ * must use these formulas and the result is pixel-identical:
++ *
++ *   scale   = 2 if (v_flags & NBSD_BOOT_VIDEO_HIDPI), else
++ *             2 if v_height >= 1440, else 1
++ *   logo_w, logo_h = the logo asset at that scale (assets/bootsplash/ in
++ *             nextbsd-kernel: nextbsd-logo.png at 1x, nextbsd-logo@2x.png)
++ *   logo_x  = (v_width - logo_w) / 2
++ *   logo_y  = v_height / 2 - logo_h / 2       (vertical centre at height/2)
++ *   spin_d  = 40 * scale
++ *   spin_x  = (v_width - spin_d) / 2
++ *   spin_y  = logo_y + logo_h + (logo_h * 40) / 100
++ *
++ * All divisions are unsigned integer divisions. Colours are 0x00RRGGBB
++ * with exact 8-bit components: bootsplash_style "black" (and unset) is
++ * bg 0x000000 / fg 0xFFFFFF, "grey" is bg 0x5F6770 / fg 0x000000; fg is the
++ * spinner colour. Alpha is composited as
++ *
++ *   out = (src * a + dst * (255 - a) + 127) / 255     per 8-bit channel.
++ *
++ * Layout is frozen at version 1: every field is naturally aligned, the
++ * struct is 72 bytes with no padding, and new fields go at the end with a
++ * version bump. This header is self-contained so the loader can carry an
++ * identical copy (nextbsd-freebsd-compat); keep the two byte-identical.
++ */
++
++#ifndef _SYS_NBSD_BOOT_VIDEO_H_
++#define	_SYS_NBSD_BOOT_VIDEO_H_
++
++#include <sys/types.h>
++
++#define	MODINFOMD_NBSD_BOOT_VIDEO	0x2001	/* struct nbsd_boot_video */
++
++#define	NBSD_BOOT_VIDEO_VERSION	1
++
++/* v_display: xnu's GRAPHICS_MODE and FB_TEXT_MODE values. */
++#define	NBSD_BOOT_VIDEO_GRAPHICS	1
++#define	NBSD_BOOT_VIDEO_TEXT		2
++
++/* v_flags */
++#define	NBSD_BOOT_VIDEO_HIDPI		0x00000001	/* kBootArgsFlagHiDPI */
++
++struct nbsd_boot_video {
++	uint32_t version;		/* NBSD_BOOT_VIDEO_VERSION */
++	uint32_t v_display;		/* 1 = GRAPHICS_MODE, 2 = FB_TEXT_MODE (xnu values) */
++	uint64_t v_baseAddr;		/* physical framebuffer base */
++	uint32_t v_width, v_height, v_rowBytes, v_depth;
++	uint32_t v_flags;		/* bit0 HIDPI */
++	uint32_t bg_rgb, fg_rgb;	/* 0x00RRGGBB */
++	uint32_t logo_x, logo_y, logo_w, logo_h;
++	uint32_t spin_x, spin_y, spin_d;
++};
++
++#endif /* !_SYS_NBSD_BOOT_VIDEO_H_ */
+diff --git a/stand/efi/loader/bootinfo.c b/stand/efi/loader/bootinfo.c
+index fe8c4f5..6358684 100644
+--- a/stand/efi/loader/bootinfo.c
++++ b/stand/efi/loader/bootinfo.c
+@@ -210,6 +210,9 @@ bi_load_efi_data(struct preloaded_file *kfp, bool exit_bs)
+ 	}
+ #endif
+ 
++	/* NextBSD: the boot_video record, in text mode too. */
++	gfx_boot_video_metadata(kfp);
++
+ #if defined(__amd64__) || defined(__i386__)
+ 	/*
+ 	 * Staging can't move after this point, so report the final value before
+-- 
+2.54.0 (Apple Git-157)
+
