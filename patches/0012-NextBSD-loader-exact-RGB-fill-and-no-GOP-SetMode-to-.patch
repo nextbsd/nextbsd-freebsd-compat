@@ -1,0 +1,177 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pkgdemon <jpm820@gmail.com>
+Date: Sat, 7 Nov 2026 13:01:07 -0600
+Subject: [PATCH] NextBSD: loader exact-RGB fill, and no GOP SetMode to the
+ same mode
+
+Two primitives for NextBSD's loader boot splash (nextbsd/nextbsd#542,
+E19 audit 1 F1):
+
+- gfx_fb_fill_rgb() and its Lua binding gfx.fb_fill_rgb(r, g, b
+  [, x1, y1, x2, y2]) fill the framebuffer, or a rectangle clipped to
+  it, with an exact 24-bit colour as one VideoFill (GOP Blt on EFI).
+  gfx.fb_drawrect() paints only from the 16-colour teken palette, and
+  scaling a PNG to the whole screen would allocate width x height x 4
+  bytes of loader heap (about 33 MB at 4K). The fill allocates nothing.
+- gop_autoresize() skips gop->SetMode() when the best mode is already
+  the current one. SetMode() clears the screen to black even then, so a
+  firmware that already drives the panel natively would flash black
+  between its logo and the splash. cons_update_mode() still runs, so the
+  console is set up as before.
+
+Nothing calls gfx.fb_fill_rgb yet; the splash painter does.
+
+Carried out-of-tree for NextBSD.
+---
+ stand/common/gfx_fb.c          | 35 +++++++++++++++++++++++++++++++++
+ stand/common/gfx_fb.h          |  1 +
+ stand/efi/loader/framebuffer.c | 20 +++++++++++++------
+ stand/liblua/gfx_utils.c       | 36 ++++++++++++++++++++++++++++++++++
+ 4 files changed, 86 insertions(+), 6 deletions(-)
+
+diff --git a/stand/common/gfx_fb.c b/stand/common/gfx_fb.c
+index 93c7cb6..7f71ccd 100644
+--- a/stand/common/gfx_fb.c
++++ b/stand/common/gfx_fb.c
+@@ -1543,6 +1543,41 @@ gfx_fb_setpixel(uint32_t x, uint32_t y)
+ 	gfxfb_blt(&c, GfxFbBltVideoFill, 0, 0, x, y, 1, 1, 0);
+ }
+ 
++/*
++ * Fill [x1, x2) x [y1, y2) with an exact 24-bit colour, 0x00RRGGBB, as
++ * one VideoFill (GOP Blt on EFI).  Unlike gfx_fb_drawrect() it does not
++ * go through the 16-colour teken palette, and unlike a scaled PNG it
++ * allocates nothing.  The rectangle is clipped to the framebuffer.
++ * NextBSD: the boot splash background.
++ */
++int
++gfx_fb_fill_rgb(uint32_t x1, uint32_t y1, uint32_t x2, uint32_t y2,
++    uint32_t rgb)
++{
++#if defined(EFI)
++	EFI_GRAPHICS_OUTPUT_BLT_PIXEL p;
++#else
++	struct paletteentry p;
++#endif
++
++	if (gfx_state.tg_fb_type == FB_TEXT)
++		return (ENODEV);
++
++	if (x2 > gfx_state.tg_fb.fb_width)
++		x2 = gfx_state.tg_fb.fb_width;
++	if (y2 > gfx_state.tg_fb.fb_height)
++		y2 = gfx_state.tg_fb.fb_height;
++	if (x1 >= x2 || y1 >= y2)
++		return (EINVAL);
++
++	p.Red = (rgb >> 16) & 0xff;
++	p.Green = (rgb >> 8) & 0xff;
++	p.Blue = rgb & 0xff;
++	p.Reserved = 0;
++	return (gfxfb_blt(&p, GfxFbBltVideoFill, 0, 0, x1, y1, x2 - x1,
++	    y2 - y1, 0));
++}
++
+ /*
+  * draw rectangle in framebuffer using gfx coordinates.
+  */
+diff --git a/stand/common/gfx_fb.h b/stand/common/gfx_fb.h
+index d12bcd7..239c685 100644
+--- a/stand/common/gfx_fb.h
++++ b/stand/common/gfx_fb.h
+@@ -267,6 +267,7 @@ void gfx_fb_cons_display(uint32_t, uint32_t, uint32_t, uint32_t, void *);
+ void gfx_fb_setpixel(uint32_t, uint32_t);
+ void gfx_fb_drawrect(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
+ void gfx_term_drawrect(uint32_t, uint32_t, uint32_t, uint32_t);
++int gfx_fb_fill_rgb(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
+ void gfx_fb_line(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
+ void gfx_fb_bezier(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t,
+ 	uint32_t);
+diff --git a/stand/efi/loader/framebuffer.c b/stand/efi/loader/framebuffer.c
+index 85ffa04..8c842d8 100644
+--- a/stand/efi/loader/framebuffer.c
++++ b/stand/efi/loader/framebuffer.c
+@@ -793,12 +793,20 @@ gop_autoresize(void)
+ 	}
+ 
+ 	if (maxdim != 0) {
+-		status = gop->SetMode(gop, best_mode);
+-		if (EFI_ERROR(status)) {
+-			snprintf(command_errbuf, sizeof(command_errbuf),
+-			    "gop_autoresize: Unable to set mode to %u (error=%lu)",
+-			    mode, EFI_ERROR_CODE(status));
+-			return (CMD_ERROR);
++		/*
++		 * SetMode() clears the screen to black even when the mode
++		 * does not change.  Skip it then, so a firmware that already
++		 * runs the panel at its native mode shows no black frame
++		 * (NextBSD graphical boot).
++		 */
++		if (best_mode != gop->Mode->Mode) {
++			status = gop->SetMode(gop, best_mode);
++			if (EFI_ERROR(status)) {
++				snprintf(command_errbuf, sizeof(command_errbuf),
++				    "gop_autoresize: Unable to set mode to %u "
++				    "(error=%lu)", mode, EFI_ERROR_CODE(status));
++				return (CMD_ERROR);
++			}
+ 		}
+ 		(void) cons_update_mode(true);
+ 	}
+diff --git a/stand/liblua/gfx_utils.c b/stand/liblua/gfx_utils.c
+index 301cd9c..ed2263b 100644
+--- a/stand/liblua/gfx_utils.c
++++ b/stand/liblua/gfx_utils.c
+@@ -202,6 +202,41 @@ lua_fb_drawrect(lua_State *L)
+ 	return 0;
+ }
+ 
++/*
++ * gfx.fb_fill_rgb(r, g, b [, x1, y1, x2, y2])
++ * Fill the framebuffer, or the rectangle [x1, x2) x [y1, y2), with the
++ * exact colour r, g, b (0-255 each), as one GOP VideoFill.  Returns true
++ * when the fill was done.  NextBSD: the boot splash background.
++ */
++static int
++lua_fb_fill_rgb(lua_State *L)
++{
++	uint32_t r, g, b, x1, y1, x2, y2;
++	int nargs;
++
++	nargs = lua_gettop(L);
++	if (nargs != 3 && nargs != 7) {
++		lua_pushnil(L);
++		return 1;
++	}
++
++	r = luaL_checkinteger(L, 1) & 0xff;
++	g = luaL_checkinteger(L, 2) & 0xff;
++	b = luaL_checkinteger(L, 3) & 0xff;
++	if (nargs == 7) {
++		x1 = luaL_checknumber(L, 4);
++		y1 = luaL_checknumber(L, 5);
++		x2 = luaL_checknumber(L, 6);
++		y2 = luaL_checknumber(L, 7);
++	} else {
++		x1 = y1 = 0;
++		x2 = y2 = 0xffffffffU;	/* clipped to the framebuffer */
++	}
++	lua_pushboolean(L,
++	    gfx_fb_fill_rgb(x1, y1, x2, y2, (r << 16) | (g << 8) | b) == 0);
++	return 1;
++}
++
+ static int
+ lua_term_drawrect(lua_State *L)
+ {
+@@ -226,6 +261,7 @@ lua_term_drawrect(lua_State *L)
+ static const struct luaL_Reg gfxlib[] = {
+ 	REG_SIMPLE(fb_bezier),
+ 	REG_SIMPLE(fb_drawrect),
++	REG_SIMPLE(fb_fill_rgb),
+ 	REG_SIMPLE(fb_line),
+ 	REG_SIMPLE(fb_putimage),
+ 	REG_SIMPLE(fb_setpixel),
+-- 
+2.54.0 (Apple Git-157)
+

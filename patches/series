@@ -9,3 +9,4 @@
 0009-NextBSD-virtual_oss-build-and-install-the-Bluetooth-.patch
 0010-NextBSD-do-not-build-the-FreeBSD-Bluetooth-daemons-an.patch
 0011-NextBSD-loader-boot-video-mode-graphics-or-text-deci.patch
+0012-NextBSD-loader-exact-RGB-fill-and-no-GOP-SetMode-to-.patch
