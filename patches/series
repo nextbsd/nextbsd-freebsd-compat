@@ -11,3 +11,4 @@
 0011-NextBSD-loader-boot-video-mode-graphics-or-text-deci.patch
 0012-NextBSD-loader-exact-RGB-fill-and-no-GOP-SetMode-to-.patch
 0013-NextBSD-loader-hands-the-kernel-a-boot_video-record-.patch
+0014-NextBSD-loader-paints-the-boot-splash.patch

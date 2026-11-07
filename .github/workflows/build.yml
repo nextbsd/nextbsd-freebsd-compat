@@ -6,7 +6,7 @@ on:
     # Validate the from-source base build (both arches) on PRs touching the strip
     # scripts, the source patches or the workflow. PR runs never cascade — the downstream nextbsd ISO
     # dispatch is gated on github.ref == 'refs/heads/main'.
-    paths: ['scripts/**', 'patches/**', '.github/workflows/build.yml']
+    paths: ['scripts/**', 'patches/**', 'src-overlay/**', '.github/workflows/build.yml']
   workflow_dispatch:
     inputs:
       fbsd_sha:
@@ -58,11 +58,18 @@ jobs:
       # same layout as nextbsd-kernel's. The image's /usr/src is a shallow git
       # clone of nextbsd/freebsd-src, so git apply works on it. Each patch is
       # logged; set -e stops the build on the first one that does not apply.
+      # src-overlay/ holds whole new files (binary assets such as the boot
+      # splash PNGs) copied onto /usr/src first, as in nextbsd-kernel.
       - name: Apply NextBSD source patches
         run: |
           set -eu
           cd /usr/src
           echo "/usr/src at $(git rev-parse HEAD 2>/dev/null || echo unknown)"
+          if [ -d "$GITHUB_WORKSPACE/src-overlay" ]; then
+            echo "Copying src-overlay/ onto /usr/src"
+            (cd "$GITHUB_WORKSPACE/src-overlay" && find . -type f | sort)
+            cp -R "$GITHUB_WORKSPACE/src-overlay/." /usr/src/
+          fi
           for p in $(cat "$GITHUB_WORKSPACE/patches/series"); do
             echo "Applying $p"
             git apply --verbose "$GITHUB_WORKSPACE/patches/$p" \

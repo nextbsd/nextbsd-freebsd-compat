@@ -1,0 +1,283 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pkgdemon <jpm820@gmail.com>
+Date: Sat, 7 Nov 2026 13:14:10 -0600
+Subject: [PATCH] NextBSD: loader paints the boot splash
+
+The loader's boot splash for NextBSD's graphical boot
+(nextbsd/nextbsd#542, E19 audit 1 D3), the boot.efi paint. In boot-video
+graphics mode, loader.lua paints in one pass right after
+efi-autoresizecons, once the console is at the panel's native mode:
+
+- the bootsplash_style background, as one exact-RGB VideoFill
+  (gfx.fb_fill_rgb): black #000000 (also when unset) or grey #5F6770;
+- the NextBSD logo, centred with its vertical centre at height / 2, at
+  1x or 2x (2x with HIDPI or from 1440 lines up);
+- spinner frame 0, 40 px (80 px at 2x), centred with its top 40% of the
+  logo height below the logo, white on black or black on grey at the
+  same alpha (gfx.fb_putmask).
+
+gfx.boot_splash() returns the colours, scale, asset paths and rectangles
+from the same C code that fills the boot_video record, so the loader's
+frame and the kernel's repaint agree. The loader's alpha blend now
+rounds to nearest, out = (src * a + dst * (255 - a) + 127) / 255, the
+formula in nbsd_boot_video.h, so the composite is pixel-identical; at
+alpha 0 and 255 (font glyphs) nothing changes.
+
+stand/images installs nextbsd-logo{,@2x}.png and
+nextbsd-spinner{,@2x}.png to /boot/images. They are generated in
+nextbsd-kernel assets/bootsplash/ and carried verbatim by
+nextbsd-freebsd-compat src-overlay/stand/images/.
+
+Text mode, BIOS and serial consoles paint nothing.
+
+Carried out-of-tree for NextBSD.
+---
+ stand/common/gfx_fb.c    |  14 +++--
+ stand/common/gfx_fb.h    |   2 +
+ stand/images/Makefile    |   6 ++
+ stand/liblua/gfx_utils.c | 118 +++++++++++++++++++++++++++++++++++++++
+ stand/lua/loader.lua     |  24 ++++++++
+ 5 files changed, 158 insertions(+), 6 deletions(-)
+
+diff --git a/stand/common/gfx_fb.c b/stand/common/gfx_fb.c
+index 0e5e2d7..a8c7e5a 100644
+--- a/stand/common/gfx_fb.c
++++ b/stand/common/gfx_fb.c
+@@ -1358,7 +1358,7 @@ gfx_fb_copy(void *arg, const teken_rect_t *r, const teken_pos_t *p)
+ static uint8_t
+ alpha_blend(uint8_t fg, uint8_t bg, uint8_t alpha)
+ {
+-	uint16_t blend, h, l;
++	uint16_t blend, h;
+ 
+ 	/* trivial corner cases */
+ 	if (alpha == 0)
+@@ -1366,11 +1366,13 @@ alpha_blend(uint8_t fg, uint8_t bg, uint8_t alpha)
+ 	if (alpha == 0xFF)
+ 		return (fg);
+ 	blend = (alpha * fg + (0xFF - alpha) * bg);
+-	/* Division by 0xFF */
+-	h = blend >> 8;
+-	l = blend & 0xFF;
+-	if (h + l >= 0xFF)
+-		h++;
++	/*
++	 * Division by 0xFF, rounded to nearest: NextBSD's boot splash
++	 * composites exactly as the kernel does (nbsd_boot_video.h),
++	 * out = (src * a + dst * (255 - a) + 127) / 255, so the loader's
++	 * frame and the kernel's repaint are pixel-identical.
++	 */
++	h = (blend + 127) / 0xFF;
+ 	return (h);
+ }
+ 
+diff --git a/stand/common/gfx_fb.h b/stand/common/gfx_fb.h
+index 83cf6eb..7b396ff 100644
+--- a/stand/common/gfx_fb.h
++++ b/stand/common/gfx_fb.h
+@@ -276,6 +276,8 @@ int gfx_fb_fill_rgb(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
+  */
+ #define	NBSD_SPLASH_LOGO	"/boot/images/nextbsd-logo.png"
+ #define	NBSD_SPLASH_LOGO_2X	"/boot/images/nextbsd-logo@2x.png"
++#define	NBSD_SPLASH_SPINNER	"/boot/images/nextbsd-spinner.png"
++#define	NBSD_SPLASH_SPINNER_2X	"/boot/images/nextbsd-spinner@2x.png"
+ #define	NBSD_SPLASH_HIDPI_PPI	200	/* EDID density for 2x (HiDPI) */
+ struct nbsd_boot_video;
+ struct preloaded_file;
+diff --git a/stand/images/Makefile b/stand/images/Makefile
+index 2f45b98..acc2ea0 100644
+--- a/stand/images/Makefile
++++ b/stand/images/Makefile
+@@ -3,6 +3,12 @@
+ FILES+=	freebsd-brand-rev.png freebsd-brand.png freebsd-install-brand-rev.png \
+ 	freebsd-logo-rev.png
+ 
++# NextBSD boot splash: the logo and spinner frame 0, 1x and 2x
++# (generated in nextbsd-kernel assets/bootsplash/; carried verbatim by
++# nextbsd-freebsd-compat src-overlay/stand/images/).
++FILES+=	nextbsd-logo.png nextbsd-logo@2x.png \
++	nextbsd-spinner.png nextbsd-spinner@2x.png
++
+ FILESDIR=  /boot/images
+ 
+ .include <bsd.prog.mk>
+diff --git a/stand/liblua/gfx_utils.c b/stand/liblua/gfx_utils.c
+index ed2263b..0cb4f80 100644
+--- a/stand/liblua/gfx_utils.c
++++ b/stand/liblua/gfx_utils.c
+@@ -38,6 +38,7 @@
+ #include "lutils.h"
+ #include <gfx_fb.h>
+ #include <pnglite.h>
++#include "nbsd_boot_video.h"
+ 
+ /*
+  * put image using terminal coordinates.
+@@ -257,12 +258,129 @@ lua_term_drawrect(lua_State *L)
+ 	return 0;
+ }
+ 
++/*
++ * gfx.boot_splash()
++ * NextBSD's boot splash for the current framebuffer, computed by the same
++ * code as the boot_video record the kernel gets (gfx_boot_splash_*), so
++ * the loader paints exactly what the kernel repaints.  Returns nil on a
++ * text console, else a table:
++ *   bg, fg		0xRRGGBB background and spinner colours (bootsplash_style)
++ *   scale		1 or 2
++ *   logo		the logo PNG for that scale, or nil when it can't be read
++ *   spinner	spinner frame 0 (white + alpha) for that scale
++ *   logo_x, logo_y, logo_w, logo_h, spin_x, spin_y, spin_d
++ */
++static void
++lua_setfield_int(lua_State *L, const char *k, uint32_t v)
++{
++	lua_pushinteger(L, v);
++	lua_setfield(L, -2, k);
++}
++
++static int
++lua_boot_splash(lua_State *L)
++{
++	struct nbsd_boot_video bv;
++	const char *logo;
++	uint32_t scale, w, h;
++	png_t png;
++
++	if (gfx_state.tg_fb_type == FB_TEXT) {
++		lua_pushnil(L);
++		return 1;
++	}
++
++	memset(&bv, 0, sizeof(bv));
++	bv.v_width = gfx_state.tg_fb.fb_width;
++	bv.v_height = gfx_state.tg_fb.fb_height;
++	bv.v_flags = gfx_boot_splash_flags();
++	gfx_boot_splash_style(&bv.bg_rgb, &bv.fg_rgb);
++	scale = gfx_boot_splash_scale(bv.v_flags, bv.v_height);
++	logo = gfx_boot_splash_logo(scale);
++
++	w = h = 0;
++	if (png_open(&png, logo) == PNG_NO_ERROR) {
++		w = png.width;
++		h = png.height;
++		(void) png_close(&png);
++	} else {
++		logo = NULL;
++	}
++	gfx_boot_splash_geometry(&bv, w, h);
++
++	lua_newtable(L);
++	lua_setfield_int(L, "bg", bv.bg_rgb);
++	lua_setfield_int(L, "fg", bv.fg_rgb);
++	lua_setfield_int(L, "scale", scale);
++	if (logo != NULL) {
++		lua_pushstring(L, logo);
++		lua_setfield(L, -2, "logo");
++	}
++	lua_pushstring(L, scale == 2 ? NBSD_SPLASH_SPINNER_2X :
++	    NBSD_SPLASH_SPINNER);
++	lua_setfield(L, -2, "spinner");
++	lua_setfield_int(L, "logo_x", bv.logo_x);
++	lua_setfield_int(L, "logo_y", bv.logo_y);
++	lua_setfield_int(L, "logo_w", bv.logo_w);
++	lua_setfield_int(L, "logo_h", bv.logo_h);
++	lua_setfield_int(L, "spin_x", bv.spin_x);
++	lua_setfield_int(L, "spin_y", bv.spin_y);
++	lua_setfield_int(L, "spin_d", bv.spin_d);
++	return 1;
++}
++
++/*
++ * gfx.fb_putmask(name, x, y, r, g, b)
++ * Blend an RGBA PNG at its own size with its top-left corner at (x, y),
++ * painting every pixel in the colour r, g, b with the PNG's alpha.
++ * NextBSD: the boot splash spinner, white or black at the same alpha.
++ */
++static int
++lua_fb_putmask(lua_State *L)
++{
++	const char *name;
++	png_t png;
++	uint32_t x, y, i;
++	uint8_t r, g, b;
++	int ret = 0;
++
++	if (lua_gettop(L) != 6) {
++		lua_pushboolean(L, 0);
++		return 1;
++	}
++
++	name = luaL_checkstring(L, 1);
++	x = luaL_checknumber(L, 2);
++	y = luaL_checknumber(L, 3);
++	r = luaL_checkinteger(L, 4) & 0xff;
++	g = luaL_checkinteger(L, 5) & 0xff;
++	b = luaL_checkinteger(L, 6) & 0xff;
++
++	if (png_open(&png, name) == PNG_NO_ERROR) {
++		if (png.color_type == PNG_TRUECOLOR_ALPHA) {
++			for (i = 0; i + 3 < png.png_datalen; i += 4) {
++				png.image[i] = r;
++				png.image[i + 1] = g;
++				png.image[i + 2] = b;
++			}
++			if (gfx_fb_putimage(&png, x, y, x + png.width,
++			    y + png.height, FL_PUTIMAGE_NOSCROLL) == 0)
++				ret = 1;
++		}
++		(void) png_close(&png);
++	}
++	lua_pushboolean(L, ret);
++	return 1;
++}
++
+ #define REG_SIMPLE(n)	{ #n, lua_ ## n }
+ static const struct luaL_Reg gfxlib[] = {
++	REG_SIMPLE(boot_splash),
+ 	REG_SIMPLE(fb_bezier),
+ 	REG_SIMPLE(fb_drawrect),
+ 	REG_SIMPLE(fb_fill_rgb),
+ 	REG_SIMPLE(fb_line),
++	REG_SIMPLE(fb_putmask),
+ 	REG_SIMPLE(fb_putimage),
+ 	REG_SIMPLE(fb_setpixel),
+ 	REG_SIMPLE(term_drawrect),
+diff --git a/stand/lua/loader.lua b/stand/lua/loader.lua
+index ec08a98..2357b2f 100644
+--- a/stand/lua/loader.lua
++++ b/stand/lua/loader.lua
+@@ -68,6 +68,30 @@ end
+ if core.isUEFIBoot() then
+ 	loader.perform("efi-autoresizecons")
+ end
++
++-- NextBSD boot splash, the boot.efi paint: in boot-video graphics mode,
++-- right after the console reaches the panel's native mode, paint the
++-- bootsplash_style background, the centred NextBSD logo and spinner frame
++-- 0 in one pass.  gfx.boot_splash() computes the geometry with the same
++-- code as the boot_video record, so the kernel repaints the same pixels.
++if core.isUEFIBoot() and gfx ~= nil and gfx.boot_splash ~= nil and
++    loader.perform("boot-video is-graphics") == 0 then
++	local splash = gfx.boot_splash()
++	if splash ~= nil then
++		local bg = splash.bg
++		gfx.fb_fill_rgb((bg >> 16) & 0xff, (bg >> 8) & 0xff, bg & 0xff)
++		if splash.logo ~= nil then
++			-- 2: FL_PUTIMAGE_NOSCROLL, the logo is not console text
++			gfx.fb_putimage(splash.logo, splash.logo_x, splash.logo_y,
++			    splash.logo_x + splash.logo_w,
++			    splash.logo_y + splash.logo_h, 2)
++		end
++		-- spinner frame 0, in the style's spinner colour
++		local fg = splash.fg
++		gfx.fb_putmask(splash.spinner, splash.spin_x, splash.spin_y,
++		    (fg >> 16) & 0xff, (fg >> 8) & 0xff, fg & 0xff)
++	end
++end
+ -- Our console may have been setup with different settings before we get
+ -- here, so make sure we reset everything back to default.
+ if color.isEnabled() then
+-- 
+2.54.0 (Apple Git-157)
+

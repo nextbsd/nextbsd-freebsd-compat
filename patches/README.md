@@ -9,6 +9,15 @@ The "Apply NextBSD source patches" step in
 [`build.yml`](../.github/workflows/build.yml) runs before buildworld. It logs
 each patch, and the build fails on the first patch that does not apply.
 
+## `src-overlay/`
+
+Whole new files that a text patch can't carry well, such as binary
+assets, live under [`../src-overlay/`](../src-overlay) at their
+`/usr/src` path. The same step copies them onto `/usr/src` before it
+applies the series, as `nextbsd-kernel` does. Today that is
+`stand/images/nextbsd-{logo,spinner}{,@2x}.png`, the boot splash assets
+(patch `0014`).
+
 ## `series` format
 
 One patch filename per line, relative to this directory. **No comments or
@@ -183,3 +192,17 @@ byte-identical copy of nextbsd-kernel's
   The loader no longer reads `splash=` or `shutdown_splash=`, so the
   FreeBSD logo never reaches the kernel, and the "Loading splash ok"
   lines are gone.
+
+## `0014`: the loader paints the boot splash
+
+The boot.efi paint (nextbsd/nextbsd-freebsd-compat#79). In boot-video
+graphics mode, `loader.lua` paints in one pass right after
+`efi-autoresizecons`: the `bootsplash_style` background (`black`
+`#000000`, also when unset, or `grey` `#5F6770`) as one exact-RGB fill;
+the NextBSD logo centred on `height/2` at 1x or 2x; and spinner frame 0,
+40 px (80 px at 2x), white on black or black on grey.
+`gfx.boot_splash()` returns the geometry from the same C code that fills
+the `boot_video` record (`0013`), and the loader's alpha blend rounds as
+`nbsd_boot_video.h` specifies, so the kernel repaints the same pixels.
+The four PNGs come verbatim from nextbsd-kernel `assets/bootsplash/`
+(`gen-bootsplash.py`) and install to `/boot/images/`.
