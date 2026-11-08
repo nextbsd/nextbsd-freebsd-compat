@@ -12,3 +12,4 @@
 0012-NextBSD-loader-exact-RGB-fill-and-no-GOP-SetMode-to-.patch
 0013-NextBSD-loader-hands-the-kernel-a-boot_video-record-.patch
 0014-NextBSD-loader-paints-the-boot-splash.patch
+0015-NextBSD-loader-startup-keys-Command-V-Command-S-and-.patch

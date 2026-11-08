@@ -1,0 +1,172 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pkgdemon <jpm820@gmail.com>
+Date: Sat, 7 Nov 2026 20:26:43 -0600
+Subject: [PATCH] NextBSD: loader startup keys, Command-V, Command-S and Esc
+
+Darwin's startup keys for NextBSD's graphical boot
+(nextbsd/nextbsd-freebsd-compat#85, epic nextbsd/nextbsd#542).
+loader.efi reads held keys once at entry, as boot.efi does:
+
+- Command-V (Windows-V on a PC keyboard), or V alone: verbose boot
+  (RB_VERBOSE).
+- Command-S, or S alone: single-user boot (RB_SINGLE).
+- Esc: the text loader, stopped at its OK prompt once.
+
+Each one means boot-video text mode. V and S are ORed into howto, so the
+kernel gets boot_verbose / boot_single and picks its text console, and
+autoboot boots at once so the held key never stops the countdown. The
+letter alone counts because ReadKeyStroke() reports no modifiers.
+
+The keys are polled for up to 200 ms on ST->ConIn, and only when the boot
+would otherwise be graphics (no serial port in ConOut, no -v/-s/-a/-h/-D).
+A key held since power-on is usually already in ConIn; the poll catches
+firmware that flushed ConIn, through typematic repeat. Text boots
+(serial consoles, CI) never poll, so their byte stream is unchanged.
+
+Carried out-of-tree for NextBSD.
+---
+ stand/common/boot.c      |  9 +++++
+ stand/common/bootstrap.h |  2 ++
+ stand/efi/loader/main.c  | 77 +++++++++++++++++++++++++++++++++++++---
+ 3 files changed, 83 insertions(+), 5 deletions(-)
+
+diff --git a/stand/common/boot.c b/stand/common/boot.c
+index b186c3f..63b424e 100644
+--- a/stand/common/boot.c
++++ b/stand/common/boot.c
+@@ -199,6 +199,15 @@ autoboot(int timeout, char *prompt)
+ 	 */
+ 	if (efi_boot_video_display() == GRAPHICS_MODE)
+ 		timeout = -1;
++	/*
++	 * Startup keys (efi/loader/main.c): Command-V and Command-S boot at
++	 * once, as on a Mac, so the held key never stops the countdown.
++	 * Esc stops at the loader prompt, once.
++	 */
++	if (efi_boot_hotkey_howto() != 0)
++		timeout = -1;
++	if (efi_boot_hotkey_prompt())
++		return (CMD_OK);
+ #endif
+ 
+ 	kernelname = getenv("kernelname");
+diff --git a/stand/common/bootstrap.h b/stand/common/bootstrap.h
+index 2c6572d..9c9b58b 100644
+--- a/stand/common/bootstrap.h
++++ b/stand/common/bootstrap.h
+@@ -133,6 +133,8 @@ void		autoload_font(bool);
+ void		efi_boot_video_graphics(void);
+ void		efi_boot_video_text(void);
+ int		efi_boot_video_display(void);
++int		efi_boot_hotkey_howto(void);
++bool		efi_boot_hotkey_prompt(void);
+ 
+ extern int module_verbose;
+ enum {
+diff --git a/stand/efi/loader/main.c b/stand/efi/loader/main.c
+index f11e7e8..d119c31 100644
+--- a/stand/efi/loader/main.c
++++ b/stand/efi/loader/main.c
+@@ -735,6 +735,68 @@ boot_video_args(int argc, CHAR16 *argv[])
+ 	return (howto);
+ }
+ 
++/*
++ * Darwin's startup keys, read once at loader entry as boot.efi reads
++ * them: hold Command-V (Windows-V on a PC keyboard) for a verbose boot,
++ * Command-S for single-user, or Esc for the text loader stopped at its
++ * prompt.  The letter alone also counts, because ReadKeyStroke() does not
++ * report modifiers and many keyboards' firmware drivers drop them.  Any
++ * of the three means boot-video text mode.
++ *
++ * A key held since power-on is usually waiting in ConIn already; the
++ * short poll catches firmware that flushed ConIn before starting us,
++ * through the key's typematic repeat.  Only a boot that would otherwise
++ * be graphics polls, so text boots (serial consoles and CI) never wait.
++ */
++#define	BOOT_HOTKEY_POLL_MS	200
++#define	BOOT_HOTKEY_STEP_MS	10
++static int boot_hotkey_howto;
++static bool boot_hotkey_esc;
++
++static void
++boot_hotkeys_read(void)
++{
++	EFI_INPUT_KEY key;
++	int ms;
++
++	for (ms = 0; ms < BOOT_HOTKEY_POLL_MS; ms += BOOT_HOTKEY_STEP_MS) {
++		while (ST->ConIn->ReadKeyStroke(ST->ConIn, &key) ==
++		    EFI_SUCCESS) {
++			if (key.ScanCode == SCAN_ESC)
++				boot_hotkey_esc = true;
++			switch (key.UnicodeChar) {
++			case 'v': case 'V':
++				boot_hotkey_howto |= RB_VERBOSE;
++				break;
++			case 's': case 'S':
++				boot_hotkey_howto |= RB_SINGLE;
++				break;
++			}
++		}
++		if (boot_hotkey_howto != 0 || boot_hotkey_esc)
++			return;
++		BS->Stall(BOOT_HOTKEY_STEP_MS * 1000);
++	}
++}
++
++/* The boot flags the startup keys asked for (RB_VERBOSE, RB_SINGLE). */
++int
++efi_boot_hotkey_howto(void)
++{
++	return (boot_hotkey_howto);
++}
++
++/* Esc was held: true once, so the first autoboot stops at the prompt. */
++bool
++efi_boot_hotkey_prompt(void)
++{
++	bool esc;
++
++	esc = boot_hotkey_esc;
++	boot_hotkey_esc = false;
++	return (esc);
++}
++
+ /*
+  * A loader panic shows its text: leave boot-video graphics mode first.
+  * The rest is libsa's default panic_action().
+@@ -1294,13 +1356,17 @@ main(int argc, CHAR16 *argv[])
+ 	/*
+ 	 * NextBSD boot-video mode, decided once, here, before the console
+ 	 * exists (the boot.efi role).  Graphics only when ConOut has no
+-	 * serial port and the boot flags ask for no text; cons_update_mode()
+-	 * adds "and there is a GOP framebuffer".  Everything else, CI's
+-	 * serial console included, is the stock text loader.
++	 * serial port, the boot flags ask for no text and no startup key is
++	 * held; cons_update_mode() adds "and there is a GOP framebuffer".
++	 * Everything else, CI's serial console included, is the stock text
++	 * loader.
+ 	 */
+ 	if ((uhowto & (RB_SERIAL | RB_MULTIPLE)) == 0 &&
+-	    (boot_video_args(argc, argv) & BOOT_VIDEO_TEXT_HOWTO) == 0)
+-		efi_boot_video_graphics();
++	    (boot_video_args(argc, argv) & BOOT_VIDEO_TEXT_HOWTO) == 0) {
++		boot_hotkeys_read();
++		if (boot_hotkey_howto == 0 && !boot_hotkey_esc)
++			efi_boot_video_graphics();
++	}
+ 	cons_probe();
+ 
+ 	/* Set print_delay variable to have hooks in place. */
+@@ -1335,6 +1401,7 @@ main(int argc, CHAR16 *argv[])
+ 	 */
+ 	has_kbd = has_keyboard();
+ 	howto = parse_args(argc, argv);
++	howto |= boot_hotkey_howto;	/* Command-V, Command-S */
+ 	if (!has_kbd && (howto & RB_PROBE))
+ 		howto |= RB_SERIAL | RB_MULTIPLE;
+ 	howto &= ~RB_PROBE;
+-- 
+2.54.0 (Apple Git-157)
+

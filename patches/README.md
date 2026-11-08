@@ -206,3 +206,17 @@ the `boot_video` record (`0013`), and the loader's alpha blend rounds as
 `nbsd_boot_video.h` specifies, so the kernel repaints the same pixels.
 The four PNGs come verbatim from nextbsd-kernel `assets/bootsplash/`
 (`gen-bootsplash.py`) and install to `/boot/images/`.
+
+## `0015`: startup keys
+
+Darwin's startup keys (nextbsd/nextbsd-freebsd-compat#85). On a boot
+that would otherwise be graphics, `loader.efi` polls `ConIn` for up to
+200 ms at entry:
+
+| Key held | Result |
+|---|---|
+| Command-V (Windows-V on a PC keyboard), or V | verbose boot, text console, no countdown |
+| Command-S, or S | single-user boot, text console, no countdown |
+| Esc | text loader, stopped at its `OK` prompt |
+
+Text boots (serial consoles, CI) never poll, so they are unchanged.
