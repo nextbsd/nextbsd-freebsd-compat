@@ -1,0 +1,79 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pkgdemon <jpm820@gmail.com>
+Date: Sat, 7 Nov 2026 21:56:16 -0600
+Subject: [PATCH] NextBSD: loader splash, write the spinner inside its image
+ buffer
+
+Fixes a loader panic on every boot-video graphics boot ("zfree(...):
+corrupt memlist2" right after "Start @", seen in an x86_64 UTM/QEMU VM).
+
+gfx.fb_putmask() (patch 0014) recolours the spinner PNG in place up to
+png.png_datalen. pnglite sets png_datalen to the inflated IDAT size,
+width * height * bpp + height (one filter byte per row), but png.image is
+only width * height * bpp. The loop wrote height bytes past the end of
+the image, over the next heap node, and the next free() found the
+corrupt free list during bi_load().
+
+- fb_putmask() bounds the loop by width * height * 4.
+- build_splash_module() copies width * height * bpp bytes of the logo,
+  not png_datalen (that over-read was in the stock code; the kernel uses
+  the splash_info dimensions).
+
+Text, serial and CI boots never run either path.
+
+Carried out-of-tree for NextBSD.
+---
+ stand/common/gfx_fb.c    |  8 ++++++--
+ stand/liblua/gfx_utils.c | 10 ++++++++--
+ 2 files changed, 14 insertions(+), 4 deletions(-)
+
+diff --git a/stand/common/gfx_fb.c b/stand/common/gfx_fb.c
+index a8c7e5a..98b4c01 100644
+--- a/stand/common/gfx_fb.c
++++ b/stand/common/gfx_fb.c
+@@ -3247,8 +3247,12 @@ build_splash_module(vm_offset_t addr, int type)
+ 	addr += archsw.arch_copyin(&si, addr, sizeof (struct splash_info));
+ 	addr = roundup2(addr, 8);
+ 
+-	/* Copy the bitmap. */
+-	addr += archsw.arch_copyin(png.image, addr, png.png_datalen);
++	/*
++	 * Copy the bitmap: width * height * bpp bytes, the size of
++	 * png.image.  png_datalen is one filter byte per row larger.
++	 */
++	addr += archsw.arch_copyin(png.image, addr,
++	    png.width * png.height * png.bpp);
+ 	file_addmetadata(fp, MODINFOMD_SPLASH, sizeof(splashp), &splashp);
+ 
+ 	boot_splash_logo_w = png.width;
+diff --git a/stand/liblua/gfx_utils.c b/stand/liblua/gfx_utils.c
+index 0cb4f80..1ea6d33 100644
+--- a/stand/liblua/gfx_utils.c
++++ b/stand/liblua/gfx_utils.c
+@@ -340,7 +340,7 @@ lua_fb_putmask(lua_State *L)
+ {
+ 	const char *name;
+ 	png_t png;
+-	uint32_t x, y, i;
++	uint32_t x, y, i, len;
+ 	uint8_t r, g, b;
+ 	int ret = 0;
+ 
+@@ -358,7 +358,13 @@ lua_fb_putmask(lua_State *L)
+ 
+ 	if (png_open(&png, name) == PNG_NO_ERROR) {
+ 		if (png.color_type == PNG_TRUECOLOR_ALPHA) {
+-			for (i = 0; i + 3 < png.png_datalen; i += 4) {
++			/*
++			 * The decoded image is width * height * 4 bytes.
++			 * png_datalen is the inflated IDAT size, one filter
++			 * byte per row larger: never write up to it.
++			 */
++			len = png.width * png.height * 4;
++			for (i = 0; i + 3 < len; i += 4) {
+ 				png.image[i] = r;
+ 				png.image[i + 1] = g;
+ 				png.image[i + 2] = b;
+-- 
+2.54.0 (Apple Git-157)
+

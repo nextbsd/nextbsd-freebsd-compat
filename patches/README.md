@@ -220,3 +220,11 @@ that would otherwise be graphics, `loader.efi` polls `ConIn` for up to
 | Esc | text loader, stopped at its `OK` prompt |
 
 Text boots (serial consoles, CI) never poll, so they are unchanged.
+
+## `0016`: splash heap overflow fix
+
+`gfx.fb_putmask()` (`0014`) recoloured the spinner PNG up to
+`png_datalen`, which pnglite sets one filter byte per row larger than
+the decoded image. It wrote past the image buffer and the loader
+panicked in `bi_load()` ("corrupt memlist2") on every graphics boot. The
+loop and `build_splash_module()`'s copy now use `width * height * bpp`.
