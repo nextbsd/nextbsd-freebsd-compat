@@ -1,0 +1,71 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pkgdemon <jpm820@gmail.com>
+Date: Tue, 24 Nov 2026 05:53:26 -0600
+Subject: [PATCH] NextBSD: loader images, no double colour reduction through
+ GOP Blt()
+
+gfx_fb_putimage() reduces each channel to the framebuffer's width
+("rough colorspace reduction for 15/16 bit colors") before it blits.
+The direct-write path needs that: gfxfb_blt_buffer_to_video() masks
+each channel into place. GOP Blt() does not: it takes 8 bits a channel
+and packs them for the framebuffer itself, so on a 15/16 bpp GOP every
+image was reduced twice. Under U-Boot's 16 bpp GOP on a Raspberry Pi
+500+ the boot splash's white spinner (255,255,255) became (31,63,31)
+and was packed as red 3/31, green 15/63, blue 3/31, a faint green;
+the dark cube was near black.
+
+Reduce only when the blit will not go through GOP Blt(), the same
+condition gfxfb_blt() uses. 32 bpp screens shift by 0 either way and
+are unchanged.
+
+Part of nextbsd/nextbsd#542 (nextbsd-freebsd-compat#90).
+
+Carried out-of-tree for NextBSD.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ stand/common/gfx_fb.c | 21 +++++++++++++++++++++
+ 1 file changed, 21 insertions(+)
+
+diff --git a/stand/common/gfx_fb.c b/stand/common/gfx_fb.c
+index 98b4c0190..71a636109 100644
+--- a/stand/common/gfx_fb.c
++++ b/stand/common/gfx_fb.c
+@@ -849,6 +849,18 @@ gfxfb_shadow_fill(uint32_t *BltBuffer,
+ 	}
+ }
+ 
++/* NextBSD: will gfxfb_blt() go through GOP Blt()? */
++static bool
++gfx_fb_blt_by_gop(void)
++{
++#if defined(EFI)
++	return (gfx_state.tg_fb_type == FB_GOP && !ignore_gop_blt &&
++	    boot_services_active);
++#else
++	return (false);
++#endif
++}
++
+ int
+ gfxfb_blt(void *BltBuffer, GFXFB_BLT_OPERATION BltOperation,
+     uint32_t SourceX, uint32_t SourceY,
+@@ -1995,6 +2007,15 @@ gfx_fb_putimage(png_t *png, uint32_t ux1, uint32_t uy1, uint32_t ux2,
+ 	    ffs(gfx_state.tg_fb.fb_mask_green) + 1);
+ 	bs = 8 - (fls(gfx_state.tg_fb.fb_mask_blue) -
+ 	    ffs(gfx_state.tg_fb.fb_mask_blue) + 1);
++	/*
++	 * NextBSD: GOP Blt() takes 8 bits a channel and packs them for the
++	 * framebuffer itself.  Only the direct-write path wants channels
++	 * already reduced to the framebuffer's widths; reducing for Blt()
++	 * as well darkens a 15/16 bit screen twice (white came out a faint
++	 * green under U-Boot's 16 bpp GOP on a Raspberry Pi 5).
++	 */
++	if (gfx_fb_blt_by_gop())
++		rs = gs = bs = 0;
+ 
+ 	uint32_t hc = 0;
+ 	for (y = 0; y < fheight; y++) {
+-- 
+2.54.0 (Apple Git-157)
+

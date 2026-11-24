@@ -228,3 +228,25 @@ Text boots (serial consoles, CI) never poll, so they are unchanged.
 the decoded image. It wrote past the image buffer and the loader
 panicked in `bi_load()` ("corrupt memlist2") on every graphics boot. The
 loop and `build_splash_module()`'s copy now use `width * height * bpp`.
+
+## `0017`: under U-Boot, the screen is the console
+
+U-Boot's EFI sets no `ConOut`, `ConOutDev` or `ConIn` variable, so stock
+`parse_uefi_con_out()` asks for both consoles on every U-Boot boot
+(`console="efi,comconsole"`, `RB_MULTIPLE`), and `0011` never enters
+graphics mode (nextbsd/nextbsd-freebsd-compat#88). When the firmware
+vendor is `Das U-Boot` and there is a GOP, the loader now uses the screen
+only: `console="efi"`. This is how the Raspberry Pi 5 family boots
+(nextbsd/nextbsd#687). Other firmware, and U-Boot with no display, keep
+the stock behaviour. For a serial console under U-Boot, set
+`console="efi,comconsole"` or `boot_serial="YES"` in `loader.conf`.
+
+## `0018`: no double colour reduction through GOP `Blt()`
+
+`gfx_fb_putimage()` reduces each channel to the framebuffer's width
+before blitting, which the direct-write path needs. GOP `Blt()` takes
+8 bits a channel and packs them itself, so on a 15/16 bpp GOP every
+image was reduced twice (nextbsd/nextbsd-freebsd-compat#90): under
+U-Boot's 16 bpp GOP on a Raspberry Pi 500+ the splash's white spinner
+came out a faint green and the cube near black. The reduction now runs
+only when the blit will not go through `Blt()`.
