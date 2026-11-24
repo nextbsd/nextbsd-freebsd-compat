@@ -240,3 +240,13 @@ only: `console="efi"`. This is how the Raspberry Pi 5 family boots
 (nextbsd/nextbsd#687). Other firmware, and U-Boot with no display, keep
 the stock behaviour. For a serial console under U-Boot, set
 `console="efi,comconsole"` or `boot_serial="YES"` in `loader.conf`.
+
+## `0018`: no double colour reduction through GOP `Blt()`
+
+`gfx_fb_putimage()` reduces each channel to the framebuffer's width
+before blitting, which the direct-write path needs. GOP `Blt()` takes
+8 bits a channel and packs them itself, so on a 15/16 bpp GOP every
+image was reduced twice (nextbsd/nextbsd-freebsd-compat#90): under
+U-Boot's 16 bpp GOP on a Raspberry Pi 500+ the splash's white spinner
+came out a faint green and the cube near black. The reduction now runs
+only when the blit will not go through `Blt()`.
