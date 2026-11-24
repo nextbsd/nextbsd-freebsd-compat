@@ -1,0 +1,76 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pkgdemon <jpm820@gmail.com>
+Date: Tue, 24 Nov 2026 04:39:59 -0600
+Subject: [PATCH] NextBSD: loader under U-Boot, the screen is the console
+
+U-Boot's EFI sets no ConOut, ConOutDev or ConIn variable, so
+parse_uefi_con_out() takes its "no Con* variable" branch on every
+U-Boot boot and asks for both consoles: console="efi,comconsole" and
+RB_MULTIPLE. Both turn boot-video graphics mode off, in the loader
+(patch 0011 needs no serial port in ConOut) and in the kernel, which
+reads comconsole in the console variable as a serial-console request.
+On a Raspberry Pi 500+ booted through U-Boot (nextbsd/nextbsd#687) the
+boot was therefore always text: no splash and no spinner.
+
+When the firmware is U-Boot and there is a GOP, use the screen only,
+console="efi", as ConOut would say on other firmware. Other firmware,
+and U-Boot with no display, keep the stock behaviour. A serial console
+is still one loader.conf line away (console="efi,comconsole" or
+boot_serial), and either one leaves graphics mode.
+
+CI's OVMF and AAVMF set ConOut and never reach this branch.
+
+Part of nextbsd/nextbsd#542 (nextbsd-freebsd-compat#88).
+
+Carried out-of-tree for NextBSD.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ stand/efi/loader/main.c | 23 +++++++++++++++++++++++
+ 1 file changed, 23 insertions(+)
+
+diff --git a/stand/efi/loader/main.c b/stand/efi/loader/main.c
+index d119c3116..e765ccde0 100644
+--- a/stand/efi/loader/main.c
++++ b/stand/efi/loader/main.c
+@@ -1049,6 +1049,17 @@ check_acpi_spcr(void)
+ 	return (RB_SERIAL);
+ }
+ 
++/* NextBSD: U-Boot's EFI ("Das U-Boot", lib/efi_loader/efi_boottime.c). */
++static bool
++efi_firmware_is_uboot(void)
++{
++	char vendor[32];
++
++	if (ST->FirmwareVendor == NULL)
++		return (false);
++	cpy16to8(ST->FirmwareVendor, vendor, sizeof(vendor));
++	return (strcmp(vendor, "Das U-Boot") == 0);
++}
+ 
+ /*
+  * Parse ConOut (the list of consoles active) and see if we can find a serial
+@@ -1091,7 +1102,19 @@ parse_uefi_con_out(void)
+ 		 * omit this, but has a serial port redirect, we'll unavoidably
+ 		 * get doubled characters, but we'll be right in all the other
+ 		 * more common cases.
++		 *
++		 * NextBSD: U-Boot never sets a Con* variable, so on U-Boot
++		 * this branch is every boot, and the serial half turns
++		 * boot-video graphics mode off in both the loader and the
++		 * kernel.  With a GOP, U-Boot's screen is the console, as
++		 * ConOut would say on any other firmware.  loader.conf's
++		 * console="efi,comconsole" (or boot_serial) still asks for
++		 * serial, and leaves graphics mode.
+ 		 */
++		if (efi_has_gop() && efi_firmware_is_uboot()) {
++			setenv("console", "efi", 1);
++			goto out;
++		}
+ 		if (efi_has_gop())
+ 			how |= RB_MULTIPLE;
+ 		else
+-- 
+2.54.0 (Apple Git-157)
+
