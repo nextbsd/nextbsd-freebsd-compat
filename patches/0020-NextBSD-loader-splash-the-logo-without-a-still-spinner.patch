@@ -1,0 +1,53 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pkgdemon <jpm820@gmail.com>
+Date: Wed, 25 Nov 2026 12:45:00 -0600
+Subject: [PATCH] NextBSD: loader splash, the logo without a still spinner
+
+The loader painted spinner frame 0 under the logo, and it stayed still
+until the kernel's own spinner started.  On a VM whose display is
+virtio-gpu that waits for the display driver to attach (nextbsd-kernel
+patch 0110), measured at about 2.6 s on the amd64 UTM VM, and a still
+spinner looks like a hang.  The loader now paints the background and the
+logo only; the kernel's first paint adds the spinner already turning, as
+Apple's boot shows the logo first and the spinner once the system is
+working.
+
+Carried out-of-tree for NextBSD.
+---
+ stand/lua/loader.lua | 13 ++++++-------
+ 1 file changed, 6 insertions(+), 7 deletions(-)
+
+diff --git a/stand/lua/loader.lua b/stand/lua/loader.lua
+index 2357b2f..61f61cb 100644
+--- a/stand/lua/loader.lua
++++ b/stand/lua/loader.lua
+@@ -71,9 +71,12 @@ end
+ 
+ -- NextBSD boot splash, the boot.efi paint: in boot-video graphics mode,
+ -- right after the console reaches the panel's native mode, paint the
+--- bootsplash_style background, the centred NextBSD logo and spinner frame
+--- 0 in one pass.  gfx.boot_splash() computes the geometry with the same
+--- code as the boot_video record, so the kernel repaints the same pixels.
++-- bootsplash_style background and the centred NextBSD logo in one pass.
++-- gfx.boot_splash() computes the geometry with the same code as the
++-- boot_video record, so the kernel repaints the same pixels.  No spinner:
++-- the loader can't turn it, and a still one looks like a hang until the
++-- kernel starts it, which on a VM waits for the display driver.  The
++-- kernel's first paint adds it already turning.
+ if core.isUEFIBoot() and gfx ~= nil and gfx.boot_splash ~= nil and
+     loader.perform("boot-video is-graphics") == 0 then
+ 	local splash = gfx.boot_splash()
+@@ -86,10 +89,6 @@ if core.isUEFIBoot() and gfx ~= nil and gfx.boot_splash ~= nil and
+ 			    splash.logo_x + splash.logo_w,
+ 			    splash.logo_y + splash.logo_h, 2)
+ 		end
+-		-- spinner frame 0, in the style's spinner colour
+-		local fg = splash.fg
+-		gfx.fb_putmask(splash.spinner, splash.spin_x, splash.spin_y,
+-		    (fg >> 16) & 0xff, (fg >> 8) & 0xff, fg & 0xff)
+ 	end
+ end
+ -- Our console may have been setup with different settings before we get
+-- 
+2.54.0 (Apple Git-157)
+
