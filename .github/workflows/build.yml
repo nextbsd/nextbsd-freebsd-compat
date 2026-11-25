@@ -2,6 +2,13 @@ name: Build NextBSD Base (buildworld)
 on:
   repository_dispatch:
     types: [toolchain-updated]
+  push:
+    # A merge to main rebuilds and publishes `continuous`, so a loader or
+    # world fix reaches nextbsd-pkg without a manual dispatch (the 0019 loader
+    # sat unpublished for a week). Same paths as pull_request. A push run
+    # doesn't cascade: the base-updated dispatch below is for toolchain runs.
+    branches: [main]
+    paths: ['scripts/**', 'patches/**', 'src-overlay/**', '.github/workflows/build.yml']
   pull_request:
     # Validate the from-source base build (both arches) on PRs touching the strip
     # scripts, the source patches or the workflow. PR runs never cascade — the downstream nextbsd ISO
@@ -13,6 +20,14 @@ on:
         description: 'Pinned FreeBSD SHA for the toolchain image tag (blank = latest)'
         required: false
         default: ''
+
+# One run per PR: a new push cancels the PR's previous run. Runs on main
+# publish `continuous`, so they queue instead of being cancelled; toolchain
+# runs get their own group, so a merge can't replace one and drop its
+# base-updated dispatch.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'repository_dispatch' && 'chain' || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   FREEBSD_BRANCH: releng/15.1
