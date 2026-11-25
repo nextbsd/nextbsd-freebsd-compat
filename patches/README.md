@@ -200,7 +200,8 @@ graphics mode, `loader.lua` paints in one pass right after
 `efi-autoresizecons`: the `bootsplash_style` background (`black`
 `#000000`, also when unset, or `grey` `#5F6770`) as one exact-RGB fill;
 the NextBSD logo centred on `height/2` at 1x or 2x; and spinner frame 0,
-40 px (80 px at 2x), white on black or black on grey.
+40 px (80 px at 2x), white on black or black on grey (no longer since
+`0020`).
 `gfx.boot_splash()` returns the geometry from the same C code that fills
 the `boot_video` record (`0013`), and the loader's alpha blend rounds as
 `nbsd_boot_video.h` specifies, so the kernel repaints the same pixels.
@@ -272,3 +273,11 @@ virtio-gpu (nextbsd/nextbsd-freebsd-compat#91):
   still ignored. `RB_MULTIPLE` that came only from ConOut isn't exported,
   so the kernel keeps its splash. For a serial console, set
   `console="comconsole"` or `boot_serial="YES"` as before.
+
+## `0020`: the splash without a still spinner
+
+The loader paints the background and the logo only. Its spinner frame
+stood still until the kernel's spinner started, which on a virtio-gpu VM
+waits for the display driver (about 2.6 s on the amd64 UTM VM) and looks
+like a hang. The kernel's first paint adds the spinner already turning,
+so the logo comes first and the spinner once the system is working.
