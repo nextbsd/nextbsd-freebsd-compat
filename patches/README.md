@@ -250,3 +250,23 @@ image was reduced twice (nextbsd/nextbsd-freebsd-compat#90): under
 U-Boot's 16 bpp GOP on a Raspberry Pi 500+ the splash's white spinner
 came out a faint green and the cube near black. The reduction now runs
 only when the blit will not go through `Blt()`.
+
+## `0019`: graphical boot on virtio-gpu VMs
+
+Three things kept `0011`'s graphics mode off on a VM whose display is
+virtio-gpu (nextbsd/nextbsd-freebsd-compat#91):
+
+- **OVMF leaves virtio-gpu unconnected.** It connects only the devices
+  its boot needs, so with `-vga none` there is no GOP at all. When no GOP
+  exists, the loader connects the PCI display controllers itself.
+- **virtio-gpu's GOP is blit-only,** under OVMF and AAVMF alike. It is now
+  used when no GOP has a linear framebuffer. gfx_fb draws through
+  `gop->Blt()`, and the kernel's `virtio_gpu(4)` takes over from the
+  splash (nextbsd/nextbsd-kernel#437).
+- **Any serial port in ConOut meant text.** Only a serial-primary ConOut
+  does now. A serial port behind the screen is mirrored: the loader's
+  text goes to it, the autoboot countdown runs there, and a key typed
+  there stops at the prompt and leaves graphics mode. The keyboard is
+  still ignored. `RB_MULTIPLE` that came only from ConOut isn't exported,
+  so the kernel keeps its splash. For a serial console, set
+  `console="comconsole"` or `boot_serial="YES"` as before.

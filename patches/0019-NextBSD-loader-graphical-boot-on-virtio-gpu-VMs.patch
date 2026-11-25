@@ -1,0 +1,432 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pkgdemon <jpm820@gmail.com>
+Date: Wed, 25 Nov 2026 07:00:00 -0600
+Subject: [PATCH] NextBSD: loader graphical boot on virtio-gpu VMs
+
+On a VM whose display is virtio-gpu (UTM; QEMU -vga none), boot-video
+graphics mode (0011) never started (nextbsd/nextbsd-freebsd-compat#91):
+
+- OVMF connects only the devices its boot needs, so virtio-gpu-pci was
+  never started and there was no GOP at all.  When nothing produced a
+  GOP, the loader now connects the PCI display controllers (base class
+  0x03), and VirtioGpuDxe brings one up.
+- virtio-gpu's GOP is blit-only under OVMF and AAVMF alike, which
+  efi_find_framebuffer() skipped, leaving the firmware's text console
+  and its cursor.  A blit-only GOP is now used when no GOP has a linear
+  framebuffer: gfx_fb draws through gop->Blt() while boot services run,
+  and the boot_video record carries no address, so the kernel's
+  virtio_gpu(4) takes the display over from the splash
+  (nextbsd/nextbsd-kernel#437).
+- Any serial port in ConOut meant text.  Only a serial-primary ConOut
+  (RB_SERIAL) does now.  A serial port behind the screen (RB_MULTIPLE
+  alone: QEMU, UTM, a BMC redirect) is mirrored instead: the loader's
+  text goes to that port's own terminal as well as the replay ring, the
+  autoboot countdown runs, and a key typed on that port reaches the
+  prompt and leaves graphics mode, while the keyboard is still ignored.
+  CI keeps typing its console contract over serial.  RB_MULTIPLE that
+  came only from ConOut is not exported, so the kernel's splash stays.
+
+Carried out-of-tree for NextBSD.
+---
+  stand/common/boot.c            |   6 ++-
+  stand/common/bootstrap.h       |   1 +
+  stand/efi/libefi/efi_console.c | 118 +++++++++++++++++++++++++++++++++++++++--
+  stand/efi/loader/framebuffer.c |  67 +++++++++++++++++++++--
+  stand/efi/loader/framebuffer.h |   1 +
+  stand/efi/loader/main.c        |  32 ++++++++---
+  6 files changed, 212 insertions(+), 13 deletions(-)
+
+diff --git a/stand/common/boot.c b/stand/common/boot.c
+index 63b424e..b4a54c0 100644
+--- a/stand/common/boot.c
++++ b/stand/common/boot.c
+@@ -196,8 +196,12 @@ autoboot(int timeout, char *prompt)
+ 	 * NextBSD boot-video graphics mode: no key interrupts a normal boot
+ 	 * (as on Darwin) and nothing is on screen to wait for, so boot now.
+ 	 * -v, -s and serial consoles are text mode and keep the countdown.
++	 * So does a graphics boot mirrored to a serial port behind the
++	 * screen: the countdown runs there, and a key typed there (only
++	 * there) stops at the prompt.
+ 	 */
+-	if (efi_boot_video_display() == GRAPHICS_MODE)
++	if (efi_boot_video_display() == GRAPHICS_MODE &&
++	    !efi_boot_video_serial())
+ 		timeout = -1;
+ 	/*
+ 	 * Startup keys (efi/loader/main.c): Command-V and Command-S boot at
+diff --git a/stand/common/bootstrap.h b/stand/common/bootstrap.h
+index 9c9b58b..71ed770 100644
+--- a/stand/common/bootstrap.h
++++ b/stand/common/bootstrap.h
+@@ -133,6 +133,7 @@ void		autoload_font(bool);
+ void		efi_boot_video_graphics(void);
+ void		efi_boot_video_text(void);
+ int		efi_boot_video_display(void);
++bool		efi_boot_video_serial(void);
+ int		efi_boot_hotkey_howto(void);
+ bool		efi_boot_hotkey_prompt(void);
+ 
+diff --git a/stand/efi/libefi/efi_console.c b/stand/efi/libefi/efi_console.c
+index 53fe2b9..cb81559 100644
+--- a/stand/efi/libefi/efi_console.c
++++ b/stand/efi/libefi/efi_console.c
+@@ -39,6 +39,8 @@ extern EFI_GUID gop_guid;
+ bool boot_services_active = true; /* boot services active first thing in main */
+ 
+ static EFI_GUID simple_input_ex_guid = EFI_SIMPLE_TEXT_INPUT_EX_PROTOCOL_GUID;
++static EFI_GUID simple_text_out_guid = SIMPLE_TEXT_OUTPUT_PROTOCOL;
++static EFI_GUID simple_text_in_guid = SIMPLE_TEXT_INPUT_PROTOCOL;
+ static SIMPLE_TEXT_OUTPUT_INTERFACE	*conout;
+ static SIMPLE_INPUT_INTERFACE		*conin;
+ static EFI_SIMPLE_TEXT_INPUT_EX_PROTOCOL *coninex;
+@@ -64,6 +66,18 @@ static size_t boot_video_ring_head;
+ static bool boot_video_ring_wrapped;
+ static void boot_video_replay(void);
+ 
++/*
++ * NextBSD: GRAPHICS_MODE with a serial port behind the screen in ConOut
++ * (RB_MULTIPLE without RB_SERIAL).  The loader's text goes to that port's
++ * own terminal as well as the ring, and keys are read from that terminal
++ * only, so a key typed on the serial port during the autoboot countdown
++ * reaches the prompt (and leaves graphics mode) while the keyboard, as on
++ * Darwin, does not.
++ */
++static SIMPLE_TEXT_OUTPUT_INTERFACE *bv_serial_out;
++static SIMPLE_INPUT_INTERFACE *bv_serial_in;
++static void boot_video_find_serial(void);
++
+ static uint32_t utf8_left;
+ static uint32_t utf8_partial;
+ #ifdef TERM_EMU
+@@ -1071,16 +1085,21 @@ cons_update_mode(bool use_gfx_mode)
+ 	}
+ 
+ 	/*
+-	 * Boot-video GRAPHICS_MODE needs the teken console on a GOP
+-	 * framebuffer with no serial port in ConOut; anything else is text.
++	 * Boot-video GRAPHICS_MODE needs the teken console on a GOP (linear
++	 * or blit-only) and no serial port as ConOut's primary console;
++	 * anything else is text.  A serial port behind the screen is
++	 * mirrored instead (boot_video_find_serial()).
+ 	 */
+ 	replay = false;
+ 	if (boot_v_display == GRAPHICS_MODE &&
+ 	    (screen_buffer == NULL || gfx_state.tg_fb_type == FB_TEXT ||
+-	    (mode & (RB_SERIAL | RB_MULTIPLE)) != 0)) {
++	    (mode & RB_SERIAL) != 0)) {
+ 		boot_v_display = FB_TEXT_MODE;
+ 		replay = true;
+ 	}
++	if (boot_v_display == GRAPHICS_MODE && (mode & RB_MULTIPLE) != 0 &&
++	    bv_serial_out == NULL)
++		boot_video_find_serial();
+ 
+ 	if (screen_buffer == NULL) {
+ 		conout->EnableCursor(conout, TRUE);
+@@ -1252,6 +1271,17 @@ efi_cons_putchar(int c)
+ 			boot_video_ring_head = 0;
+ 			boot_video_ring_wrapped = true;
+ 		}
++		/* ...and show it on the serial port behind the screen. */
++		if (bv_serial_out != NULL && boot_services_active) {
++			CHAR16 buf[3];
++			int i = 0;
++
++			if (ch == '\n')
++				buf[i++] = '\r';
++			buf[i++] = ch;
++			buf[i] = 0;
++			bv_serial_out->OutputString(bv_serial_out, buf);
++		}
+ 		return;
+ 	}
+ 
+@@ -1321,10 +1351,70 @@ efi_boot_video_text(void)
+ 		teken_input(&gfx_state.tg_teken, "\e[2J", 4);
+ 		gfx_state.tg_functions->tf_param(&gfx_state,
+ 		    TP_SHOWCURSOR, 1);
++	} else if ((mode & RB_MULTIPLE) != 0 && boot_services_active) {
++		/* The firmware's text console takes over from the splash. */
++		conout->ClearScreen(conout);
++		conout->EnableCursor(conout, TRUE);
++	}
++	/*
++	 * The serial port behind the screen already has every byte; the
++	 * text from here on reaches it through ConOut as in the stock loader.
++	 */
++	if (bv_serial_out != NULL) {
++		bv_serial_out = NULL;
++		bv_serial_in = NULL;
++		boot_video_ring_head = 0;
++		boot_video_ring_wrapped = false;
++		return;
+ 	}
+ 	boot_video_replay();
+ }
+ 
++/*
++ * The terminal on the serial port ConOut lists: the SimpleTextOut handle
++ * whose device path has a UART node, and its SimpleTextIn.  None found
++ * leaves the loader's text in the ring only, as before.
++ */
++static void
++boot_video_find_serial(void)
++{
++	EFI_DEVICE_PATH *dp;
++	EFI_HANDLE *hlist;
++	EFI_STATUS status;
++	UINTN i, n;
++	void *out, *in;
++
++	status = BS->LocateHandleBuffer(ByProtocol, &simple_text_out_guid,
++	    NULL, &n, &hlist);
++	if (EFI_ERROR(status))
++		return;
++	for (i = 0; i < n && bv_serial_out == NULL; i++) {
++		for (dp = efi_lookup_devpath(hlist[i]);
++		    dp != NULL && !IsDevicePathEnd(dp);
++		    dp = NextDevicePathNode(dp)) {
++			if (DevicePathType(dp) != MESSAGING_DEVICE_PATH ||
++			    DevicePathSubType(dp) != MSG_UART_DP)
++				continue;
++			if (OpenProtocolByHandle(hlist[i],
++			    &simple_text_out_guid, &out) != EFI_SUCCESS ||
++			    OpenProtocolByHandle(hlist[i],
++			    &simple_text_in_guid, &in) != EFI_SUCCESS)
++				break;
++			bv_serial_out = out;
++			bv_serial_in = in;
++			break;
++		}
++	}
++	BS->FreePool(hlist);
++}
++
++/* A serial port mirrors the graphics boot: keep the autoboot countdown. */
++bool
++efi_boot_video_serial(void)
++{
++	return (boot_v_display == GRAPHICS_MODE && bv_serial_in != NULL);
++}
++
+ COMMAND_SET(boot_video, "boot-video",
+     "boot-video mode: status, is-graphics, text", command_boot_video);
+ 
+@@ -1482,6 +1572,19 @@ efi_cons_getchar(void)
+ 
+ 	key_pending = 0;
+ 
++	/* GRAPHICS_MODE: the keyboard is ignored; the serial port is not. */
++	if (boot_v_display == GRAPHICS_MODE) {
++		EFI_INPUT_KEY key;
++
++		if (bv_serial_in != NULL &&
++		    bv_serial_in->ReadKeyStroke(bv_serial_in, &key) ==
++		    EFI_SUCCESS) {
++			keybuf_inschar(&key);
++			return (keybuf_getchar());
++		}
++		return (-1);
++	}
++
+ 	if (coninex == NULL) {
+ 		if (efi_readkey())
+ 			return (keybuf_getchar());
+@@ -1504,6 +1607,15 @@ efi_cons_poll(void)
+ 	if (!boot_services_active)
+ 		return (0);
+ 
++	/* GRAPHICS_MODE: only the serial port behind the screen. */
++	if (boot_v_display == GRAPHICS_MODE) {
++		if (bv_serial_in == NULL)
++			return (0);
++		key_pending = BS->CheckEvent(bv_serial_in->WaitForKey) ==
++		    EFI_SUCCESS;
++		return (key_pending);
++	}
++
+ 	/*
+ 	 * Some EFI implementation (u-boot for example) do not support
+ 	 * WaitForKey().
+diff --git a/stand/efi/loader/framebuffer.c b/stand/efi/loader/framebuffer.c
+index 8c842d8..4404a7f 100644
+--- a/stand/efi/loader/framebuffer.c
++++ b/stand/efi/loader/framebuffer.c
+@@ -163,6 +163,9 @@ efifb_from_gop(struct efi_fb *efifb, EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE *mode,
+ 	efifb->fb_height = info->VerticalResolution;
+ 	efifb->fb_width = info->HorizontalResolution;
+ 	efifb->fb_stride = info->PixelsPerScanLine;
++	/* NextBSD: a blit-only mode need not give a scan line length. */
++	if (efifb->fb_stride == 0)
++		efifb->fb_stride = efifb->fb_width;
+ 	result = efifb_mask_from_pixfmt(efifb, info->PixelFormat,
+ 	    &info->PixelInformation);
+ 	return (result);
+@@ -578,11 +581,51 @@ efi_has_gop(void)
+ }
+ 
+ 
++/*
++ * NextBSD: start the firmware's drivers for the PCI display controllers when
++ * nothing produced a GOP.  OVMF connects only the devices its boot needs
++ * (ConOut and the boot disk), so a VM whose only display is virtio-gpu-pci
++ * (-vga none) reaches the loader with VirtioGpuDxe never started and no GOP
++ * at all, although the driver is there (the UEFI shell's full connect shows
++ * it).  Connecting display controllers only (PCI base class 0x03) keeps
++ * the rest of the machine as the firmware left it.
++ */
++void
++efi_connect_display_controllers(void)
++{
++	EFI_PCI_IO_PROTOCOL *pciio;
++	EFI_HANDLE *hlist;
++	EFI_STATUS status;
++	UINTN i, nhandles;
++	UINT8 class[3];
++
++	if (efi_has_gop())
++		return;
++	status = BS->LocateHandleBuffer(ByProtocol, &pciio_guid, NULL,
++	    &nhandles, &hlist);
++	if (EFI_ERROR(status))
++		return;
++	for (i = 0; i < nhandles; i++) {
++		status = OpenProtocolByHandle(hlist[i], &pciio_guid,
++		    (void **)&pciio);
++		if (EFI_ERROR(status))
++			continue;
++		/* Programming interface, subclass, base class at 0x09. */
++		status = pciio->Pci.Read(pciio, EfiPciIoWidthUint8, 0x09, 3,
++		    class);
++		if (EFI_ERROR(status) || class[2] != 0x03)
++			continue;
++		(void)BS->ConnectController(hlist[i], NULL, NULL, TRUE);
++	}
++	BS->FreePool(hlist);
++}
++
+ int
+ efi_find_framebuffer(teken_gfx_t *gfx_state)
+ {
+ 	EFI_PHYSICAL_ADDRESS ptr;
+-	EFI_HANDLE *hlist;
++	EFI_HANDLE *hlist, blt_handle;
++	EFI_GRAPHICS_OUTPUT *blt_gop = NULL;
+ 	UINTN nhandles, i, hsize;
+ 	struct efi_fb efifb;
+ 	EFI_STATUS status;
+@@ -616,8 +659,16 @@ efi_find_framebuffer(teken_gfx_t *gfx_state)
+ 
+ 		/*
+ 		 * Search for ConOut protocol, if not found, use first handle.
++		 *
++		 * NextBSD: a blit-only GOP (virtio-gpu, under OVMF and
++		 * AAVMF alike) is used when no GOP has a linear framebuffer.
++		 * gfx_fb draws everything through gop->Blt() while boot
++		 * services run, and the kernel gets no EFI framebuffer
++		 * record (fb_addr is 0); its own virtio_gpu(4) takes the
++		 * display over from the splash.
+ 		 */
+ 		gop_handle = NULL;
++		blt_handle = NULL;
+ 		for (i = 0; i < nhandles; i++) {
+ 			EFI_GRAPHICS_OUTPUT *tgop;
+ 			void *dummy;
+@@ -627,8 +678,14 @@ efi_find_framebuffer(teken_gfx_t *gfx_state)
+ 			if (status != EFI_SUCCESS)
+ 				continue;
+ 
+-			if (tgop->Mode->Info->PixelFormat == PixelBltOnly ||
+-			    tgop->Mode->Info->PixelFormat >= PixelFormatMax)
++			if (tgop->Mode->Info->PixelFormat == PixelBltOnly) {
++				if (blt_handle == NULL) {
++					blt_handle = hlist[i];
++					blt_gop = tgop;
++				}
++				continue;
++			}
++			if (tgop->Mode->Info->PixelFormat >= PixelFormatMax)
+ 				continue;
+ 
+ 			status = OpenProtocolByHandle(hlist[i], &conout_guid,
+@@ -644,6 +701,10 @@ efi_find_framebuffer(teken_gfx_t *gfx_state)
+ 		}
+ 
+ 		free(hlist);
++		if (gop_handle == NULL && blt_handle != NULL) {
++			gop_handle = blt_handle;
++			gop = blt_gop;
++		}
+ 		if (gop_handle == NULL)
+ 			return (ENXIO);
+ 
+diff --git a/stand/efi/loader/framebuffer.h b/stand/efi/loader/framebuffer.h
+index c6015f4..3524b53 100644
+--- a/stand/efi/loader/framebuffer.h
++++ b/stand/efi/loader/framebuffer.h
+@@ -32,6 +32,7 @@
+ #define	_EFIFB_H_
+ 
+ bool	efi_has_gop(void);
++void	efi_connect_display_controllers(void);
+ int	efi_find_framebuffer(teken_gfx_t *gfx_state);
+ 
+ #endif /* _EFIFB_H_ */
+diff --git a/stand/efi/loader/main.c b/stand/efi/loader/main.c
+index e765ccd..0d15350 100644
+--- a/stand/efi/loader/main.c
++++ b/stand/efi/loader/main.c
+@@ -1368,6 +1368,8 @@ main(int argc, CHAR16 *argv[])
+ 	 * changes to take effect, regardless of where they come from.
+ 	 */
+ 	setenv("console", "efi", 1);
++	/* NextBSD: OVMF leaves a virtio-gpu-only display unconnected. */
++	efi_connect_display_controllers();
+ 	uhowto = parse_uefi_con_out();
+ #if defined(__riscv)
+ 	/*
+@@ -1378,13 +1380,18 @@ main(int argc, CHAR16 *argv[])
+ #endif
+ 	/*
+ 	 * NextBSD boot-video mode, decided once, here, before the console
+-	 * exists (the boot.efi role).  Graphics only when ConOut has no
+-	 * serial port, the boot flags ask for no text and no startup key is
+-	 * held; cons_update_mode() adds "and there is a GOP framebuffer".
+-	 * Everything else, CI's serial console included, is the stock text
+-	 * loader.
++	 * exists (the boot.efi role).  Graphics unless ConOut makes a serial
++	 * port the primary console, the boot flags ask for text or a startup
++	 * key is held; cons_update_mode() adds "and there is a GOP".
++	 *
++	 * A serial port that ConOut lists after the screen (RB_MULTIPLE
++	 * alone: QEMU, UTM, a BMC's redirect) no longer means text: the
++	 * screen keeps the splash, the loader's text is mirrored to that
++	 * port, and a key typed there during the autoboot countdown leaves
++	 * graphics mode as the text loader's prompt did (efi_console.c).
++	 * So CI still types its console contract over serial.
+ 	 */
+-	if ((uhowto & (RB_SERIAL | RB_MULTIPLE)) == 0 &&
++	if ((uhowto & RB_SERIAL) == 0 &&
+ 	    (boot_video_args(argc, argv) & BOOT_VIDEO_TEXT_HOWTO) == 0) {
+ 		boot_hotkeys_read();
+ 		if (boot_hotkey_howto == 0 && !boot_hotkey_esc)
+@@ -1489,6 +1496,19 @@ main(int argc, CHAR16 *argv[])
+ 		}
+ 	}
+ 
++	/*
++	 * NextBSD: a graphics boot with a serial port behind the screen
++	 * stays graphical in the kernel too.  The serial half of
++	 * RB_MULTIPLE came from ConOut, not from the boot flags, so it is
++	 * not exported: boot_multicons would turn the kernel's splash off.
++	 * Asking for serial (loader.conf, -D, or typing at the prompt)
++	 * still leaves graphics mode and keeps it.
++	 */
++	if (efi_boot_video_display() == GRAPHICS_MODE &&
++	    (howto & RB_MULTIPLE) != 0 && (uhowto & RB_MULTIPLE) != 0 &&
++	    (boot_video_args(argc, argv) & RB_MULTIPLE) == 0)
++		howto &= ~RB_MULTIPLE;
++
+ 	/*
+ 	 * howto is set now how we want to export the flags to the kernel, so
+ 	 * set the env based on it.
