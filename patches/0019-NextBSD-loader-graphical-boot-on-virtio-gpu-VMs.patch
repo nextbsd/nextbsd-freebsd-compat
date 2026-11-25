@@ -9,7 +9,9 @@ graphics mode (0011) never started (nextbsd/nextbsd-freebsd-compat#91):
 - OVMF connects only the devices its boot needs, so virtio-gpu-pci was
   never started and there was no GOP at all.  When nothing produced a
   GOP, the loader now connects the PCI display controllers (base class
-  0x03), and VirtioGpuDxe brings one up.
+  0x03), and VirtioGpuDxe brings one up.  That display's GOP goes first
+  in ConOut, once, so the firmware lights it on later boots instead of
+  leaving it inactive until the loader runs.
 - virtio-gpu's GOP is blit-only under OVMF and AAVMF alike, which
   efi_find_framebuffer() skipped, leaving the firmware's text console
   and its cursor.  A blit-only GOP is now used when no GOP has a linear
@@ -31,10 +33,10 @@ Carried out-of-tree for NextBSD.
   stand/common/boot.c            |   6 +-
   stand/common/bootstrap.h       |   1 +
   stand/efi/libefi/efi_console.c | 129 +++++++++++++++++++++++++++++++++++++++--
-  stand/efi/loader/framebuffer.c |  67 ++++++++++++++++++++-
+  stand/efi/loader/framebuffer.c | 124 ++++++++++++++++++++++++++++++++++++++-
   stand/efi/loader/framebuffer.h |   1 +
   stand/efi/loader/main.c        |  32 ++++++++--
-  6 files changed, 222 insertions(+), 14 deletions(-)
+  6 files changed, 279 insertions(+), 14 deletions(-)
 
 diff --git a/stand/common/boot.c b/stand/common/boot.c
 index 63b424e..b4a54c0 100644
@@ -267,7 +269,7 @@ index 53fe2b9..7ce601f 100644
  	 * Some EFI implementation (u-boot for example) do not support
  	 * WaitForKey().
 diff --git a/stand/efi/loader/framebuffer.c b/stand/efi/loader/framebuffer.c
-index 8c842d8..4404a7f 100644
+index 8c842d8..d0542ff 100644
 --- a/stand/efi/loader/framebuffer.c
 +++ b/stand/efi/loader/framebuffer.c
 @@ -163,6 +163,9 @@ efifb_from_gop(struct efi_fb *efifb, EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE *mode,
@@ -280,7 +282,7 @@ index 8c842d8..4404a7f 100644
  	result = efifb_mask_from_pixfmt(efifb, info->PixelFormat,
  	    &info->PixelInformation);
  	return (result);
-@@ -578,11 +581,51 @@ efi_has_gop(void)
+@@ -578,11 +581,108 @@ efi_has_gop(void)
  }
  
  
@@ -293,6 +295,58 @@ index 8c842d8..4404a7f 100644
 + * it).  Connecting display controllers only (PCI base class 0x03) keeps
 + * the rest of the machine as the firmware left it.
 + */
++/*
++ * NextBSD: put the GOP the loader had to connect first in ConOut, once, so
++ * the firmware lights that display itself on later boots: without it OVMF
++ * shows nothing on a virtio-gpu-only VM until the loader runs ("Display
++ * output is not active").  First, so the screen stays the primary console
++ * and a serial port in ConOut stays behind it (RB_MULTIPLE alone).  Written
++ * only when the device path is not there yet.
++ */
++static void
++efi_conout_add_gop(void)
++{
++	EFI_GUID global_var_guid = EFI_GLOBAL_VARIABLE;
++	EFI_DEVICE_PATH *dp, *end;
++	EFI_HANDLE *hlist;
++	EFI_STATUS status;
++	UINTN nhandles;
++	size_t glen, olen, i;
++	static char old[4096], buf[4096 * 2];
++
++	status = BS->LocateHandleBuffer(ByProtocol, &gop_guid, NULL,
++	    &nhandles, &hlist);
++	if (EFI_ERROR(status))
++		return;
++	/* The display's own GOP, not the console splitter's (no path). */
++	dp = NULL;
++	for (i = 0; i < nhandles && dp == NULL; i++)
++		dp = efi_lookup_devpath(hlist[i]);
++	BS->FreePool(hlist);
++	if (dp == NULL)
++		return;
++	glen = efi_devpath_length(dp);
++	if (glen <= 4 || glen > sizeof(old))
++		return;
++	olen = sizeof(old);
++	if (efi_global_getenv("ConOut", old, &olen) != EFI_SUCCESS)
++		olen = 0;
++	/* Already listed: compare without the 4-byte end node. */
++	for (i = 0; olen >= glen - 4 && i <= olen - (glen - 4); i++)
++		if (memcmp(old + i, dp, glen - 4) == 0)
++			return;
++	memcpy(buf, dp, glen);
++	if (olen > 0) {
++		/* End this instance; the old list follows. */
++		end = (EFI_DEVICE_PATH *)(buf + glen - 4);
++		end->SubType = END_INSTANCE_DEVICE_PATH_SUBTYPE;
++		memcpy(buf + glen, old, olen);
++	}
++	(void)efi_setenv(&global_var_guid, "ConOut",
++	    EFI_VARIABLE_NON_VOLATILE | EFI_VARIABLE_BOOTSERVICE_ACCESS |
++	    EFI_VARIABLE_RUNTIME_ACCESS, buf, glen + olen);
++}
++
 +void
 +efi_connect_display_controllers(void)
 +{
@@ -301,9 +355,11 @@ index 8c842d8..4404a7f 100644
 +	EFI_STATUS status;
 +	UINTN i, nhandles;
 +	UINT8 class[3];
++	bool connected;
 +
 +	if (efi_has_gop())
 +		return;
++	connected = false;
 +	status = BS->LocateHandleBuffer(ByProtocol, &pciio_guid, NULL,
 +	    &nhandles, &hlist);
 +	if (EFI_ERROR(status))
@@ -319,8 +375,11 @@ index 8c842d8..4404a7f 100644
 +		if (EFI_ERROR(status) || class[2] != 0x03)
 +			continue;
 +		(void)BS->ConnectController(hlist[i], NULL, NULL, TRUE);
++		connected = true;
 +	}
 +	BS->FreePool(hlist);
++	if (connected && efi_has_gop())
++		efi_conout_add_gop();
 +}
 +
  int
@@ -333,7 +392,7 @@ index 8c842d8..4404a7f 100644
  	UINTN nhandles, i, hsize;
  	struct efi_fb efifb;
  	EFI_STATUS status;
-@@ -616,8 +659,16 @@ efi_find_framebuffer(teken_gfx_t *gfx_state)
+@@ -616,8 +716,16 @@ efi_find_framebuffer(teken_gfx_t *gfx_state)
  
  		/*
  		 * Search for ConOut protocol, if not found, use first handle.
@@ -350,7 +409,7 @@ index 8c842d8..4404a7f 100644
  		for (i = 0; i < nhandles; i++) {
  			EFI_GRAPHICS_OUTPUT *tgop;
  			void *dummy;
-@@ -627,8 +678,14 @@ efi_find_framebuffer(teken_gfx_t *gfx_state)
+@@ -627,8 +735,14 @@ efi_find_framebuffer(teken_gfx_t *gfx_state)
  			if (status != EFI_SUCCESS)
  				continue;
  
@@ -367,7 +426,7 @@ index 8c842d8..4404a7f 100644
  				continue;
  
  			status = OpenProtocolByHandle(hlist[i], &conout_guid,
-@@ -644,6 +701,10 @@ efi_find_framebuffer(teken_gfx_t *gfx_state)
+@@ -644,6 +758,10 @@ efi_find_framebuffer(teken_gfx_t *gfx_state)
  		}
  
  		free(hlist);

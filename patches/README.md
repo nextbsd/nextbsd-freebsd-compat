@@ -258,7 +258,9 @@ virtio-gpu (nextbsd/nextbsd-freebsd-compat#91):
 
 - **OVMF leaves virtio-gpu unconnected.** It connects only the devices
   its boot needs, so with `-vga none` there is no GOP at all. When no GOP
-  exists, the loader connects the PCI display controllers itself.
+  exists, the loader connects the PCI display controllers itself, and puts
+  that display first in `ConOut`, once, so the firmware lights it on later
+  boots instead of showing nothing until the loader runs.
 - **virtio-gpu's GOP is blit-only,** under OVMF and AAVMF alike. It is now
   used when no GOP has a linear framebuffer. gfx_fb draws through
   `gop->Blt()`, and the kernel's `virtio_gpu(4)` takes over from the
