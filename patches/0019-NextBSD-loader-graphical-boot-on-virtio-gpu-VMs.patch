@@ -28,13 +28,13 @@ graphics mode (0011) never started (nextbsd/nextbsd-freebsd-compat#91):
 
 Carried out-of-tree for NextBSD.
 ---
-  stand/common/boot.c            |   6 ++-
+  stand/common/boot.c            |   6 +-
   stand/common/bootstrap.h       |   1 +
-  stand/efi/libefi/efi_console.c | 118 +++++++++++++++++++++++++++++++++++++++--
-  stand/efi/loader/framebuffer.c |  67 +++++++++++++++++++++--
+  stand/efi/libefi/efi_console.c | 129 +++++++++++++++++++++++++++++++++++++++--
+  stand/efi/loader/framebuffer.c |  67 ++++++++++++++++++++-
   stand/efi/loader/framebuffer.h |   1 +
-  stand/efi/loader/main.c        |  32 ++++++++---
-  6 files changed, 212 insertions(+), 13 deletions(-)
+  stand/efi/loader/main.c        |  32 ++++++++--
+  6 files changed, 222 insertions(+), 14 deletions(-)
 
 diff --git a/stand/common/boot.c b/stand/common/boot.c
 index 63b424e..b4a54c0 100644
@@ -67,7 +67,7 @@ index 9c9b58b..71ed770 100644
  bool		efi_boot_hotkey_prompt(void);
  
 diff --git a/stand/efi/libefi/efi_console.c b/stand/efi/libefi/efi_console.c
-index 53fe2b9..cb81559 100644
+index 53fe2b9..7ce601f 100644
 --- a/stand/efi/libefi/efi_console.c
 +++ b/stand/efi/libefi/efi_console.c
 @@ -39,6 +39,8 @@ extern EFI_GUID gop_guid;
@@ -98,7 +98,25 @@ index 53fe2b9..cb81559 100644
  static uint32_t utf8_left;
  static uint32_t utf8_partial;
  #ifdef TERM_EMU
-@@ -1071,16 +1085,21 @@ cons_update_mode(bool use_gfx_mode)
+@@ -984,7 +998,16 @@ cons_update_mode(bool use_gfx_mode)
+ 	 * we're using a serial console.
+ 	 */
+ 	mode = parse_uefi_con_out();
+-	if ((mode & (RB_SERIAL | RB_MULTIPLE)) == 0) {
++	/*
++	 * NextBSD: a boot-video GRAPHICS_MODE boot with a serial port behind
++	 * the screen (RB_MULTIPLE alone) sets the screen up as a video-only
++	 * console: the splash draws through it, and the loader's text goes
++	 * to the replay ring and the serial port's terminal, never through
++	 * the emulator below.  `mode' keeps RB_MULTIPLE for that mirror and
++	 * for the text console after a drop.
++	 */
++	if (((boot_v_display == GRAPHICS_MODE && (mode & RB_SERIAL) == 0) ?
++	    0 : (mode & (RB_SERIAL | RB_MULTIPLE))) == 0) {
+ 		conout->EnableCursor(conout, FALSE);
+ 		gfx_state.tg_cursor_visible = false;
+ 
+@@ -1071,16 +1094,21 @@ cons_update_mode(bool use_gfx_mode)
  	}
  
  	/*
@@ -123,7 +141,7 @@ index 53fe2b9..cb81559 100644
  
  	if (screen_buffer == NULL) {
  		conout->EnableCursor(conout, TRUE);
-@@ -1252,6 +1271,17 @@ efi_cons_putchar(int c)
+@@ -1252,6 +1280,17 @@ efi_cons_putchar(int c)
  			boot_video_ring_head = 0;
  			boot_video_ring_wrapped = true;
  		}
@@ -141,7 +159,7 @@ index 53fe2b9..cb81559 100644
  		return;
  	}
  
-@@ -1321,10 +1351,70 @@ efi_boot_video_text(void)
+@@ -1321,10 +1360,70 @@ efi_boot_video_text(void)
  		teken_input(&gfx_state.tg_teken, "\e[2J", 4);
  		gfx_state.tg_functions->tf_param(&gfx_state,
  		    TP_SHOWCURSOR, 1);
@@ -212,7 +230,7 @@ index 53fe2b9..cb81559 100644
  COMMAND_SET(boot_video, "boot-video",
      "boot-video mode: status, is-graphics, text", command_boot_video);
  
-@@ -1482,6 +1572,19 @@ efi_cons_getchar(void)
+@@ -1482,6 +1581,19 @@ efi_cons_getchar(void)
  
  	key_pending = 0;
  
@@ -232,7 +250,7 @@ index 53fe2b9..cb81559 100644
  	if (coninex == NULL) {
  		if (efi_readkey())
  			return (keybuf_getchar());
-@@ -1504,6 +1607,15 @@ efi_cons_poll(void)
+@@ -1504,6 +1616,15 @@ efi_cons_poll(void)
  	if (!boot_services_active)
  		return (0);
  
