@@ -281,3 +281,16 @@ stood still until the kernel's spinner started, which on a virtio-gpu VM
 waits for the display driver (about 2.6 s on the amd64 UTM VM) and looks
 like a hang. The kernel's first paint adds the spinner already turning,
 so the logo comes first and the spinner once the system is working.
+
+## `0021`: `bootenv` and `boot -r` at the prompt
+
+The installed versions of NextBSD, its ZFS boot environments named after
+their build (`27.0.0-192`), at the loader's `OK` prompt
+([#95](https://github.com/nextbsd/nextbsd-freebsd-compat/issues/95)):
+`bootenv` lists them, the one the pool starts first; `bootenv <version>`
+starts that one once; `boot -r` lists them numbered and starts the one
+picked once (a digit, Return for the first, Esc back to the prompt). That
+is the text form of the Startup Manager. On NextBSD `-r` no longer means
+FreeBSD's "use the default root". A version started here changes nothing
+on the pool: the next restart starts the usual one (`bectl activate`, or
+Installed Versions in Update). Only `stand/lua/cli.lua` changes.

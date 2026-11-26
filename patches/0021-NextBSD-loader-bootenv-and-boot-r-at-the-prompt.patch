@@ -1,0 +1,142 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pkgdemon <jpm820@gmail.com>
+Date: Wed, 25 Nov 2026 20:40:00 -0600
+Subject: [PATCH] NextBSD: loader, bootenv and boot -r at the prompt
+
+The installed versions of NextBSD (ZFS boot environments, named after
+their build: 27.0.0-192) at the loader's OK prompt
+(nextbsd/nextbsd-freebsd-compat#95):
+
+- bootenv lists them, the one the pool starts first;
+- bootenv <version> starts that one once;
+- boot -r lists them numbered and starts the one picked once (a digit;
+  Return the first, Esc back to the prompt): the text form of the Startup
+  Manager.  On NextBSD -r no longer passes FreeBSD's RB_DFLTROOT.
+
+Starting a version here changes nothing on the pool: the next restart
+starts the usual one again (bectl activate, Update's Installed Versions).
+
+Carried out-of-tree for NextBSD.
+---
+ stand/lua/cli.lua | 96 +
+ 1 file changed, 96 insertions(+), 0 deletions(-)
+
+diff --git a/stand/lua/cli.lua b/stand/lua/cli.lua
+--- a/stand/lua/cli.lua
++++ b/stand/lua/cli.lua
+@@ -115,10 +115,115 @@
+ 	return cli_execute(loader.parse(str))
+ end
+ 
++-- NextBSD: the installed versions (boot environments) by name, and
++-- starting one once (nextbsd/nextbsd-freebsd-compat#95). Each ZFS
++-- install names its versions after their build, 27.0.0-192; the one the
++-- pool starts (bectl activate, the bootfs) comes first. Starting another
++-- here changes nothing on disk: the next restart starts the usual one.
++local function nbVersions()
++	local list = {}
++
++	for _, be in ipairs(core.bootenvList()) do
++		list[#list + 1] = {
++			be = be,
++			name = be:match("/ROOT/(.+)$") or be,
++		}
++	end
++	return list
++end
++
++local function nbStartOnce(v)
++	loader.setenv("vfs.root.mountfrom", v.be)
++	loader.setenv("currdev", v.be .. ":")
++	config.reload()
++	if loader.getenv("kernelname") ~= nil then
++		loader.perform("unload")
++	end
++end
++
++-- boot -r: a numbered list, a digit starts that version once, Return
++-- the first. The text form of the Startup Manager.
++local function nbChooseVersion()
++	local list = nbVersions()
++
++	if #list == 0 then
++		print("No installed versions found (this isn't a ZFS install).")
++		return true
++	end
++	print("Choose a version of NextBSD to start:")
++	for i, v in ipairs(list) do
++		print("  " .. i .. "  " .. v.name)
++	end
++	if #list == 1 then
++		return true
++	end
++	printc("Number, or Return for " .. list[1].name .. ": ")
++	while true do
++		local ch = io.getchar()
++
++		if ch == 13 or ch == 10 then
++			print("")
++			return true
++		end
++		if ch == 27 then
++			print("")
++			return false
++		end
++		local n = ch - 48
++		if n >= 1 and n <= #list and n <= 9 then
++			print(tostring(n))
++			if n > 1 then
++				nbStartOnce(list[n])
++			end
++			return true
++		end
++	end
++end
++
++cli.bootenv = function(...)
++	local _, argv = cli.arguments(...)
++	local list = nbVersions()
++
++	if #argv == 0 then
++		if #list == 0 then
++			print("No installed versions found (this isn't a ZFS install).")
++		end
++		for _, v in ipairs(list) do
++			print("  " .. v.name)
++		end
++		return
++	end
++	for _, v in ipairs(list) do
++		if v.name == argv[1] then
++			print("Starting NextBSD " .. v.name .. " once.")
++			nbStartOnce(v)
++			core.boot("")
++			return
++		end
++	end
++	print("bootenv: no version named " .. argv[1] ..
++	    ". Type bootenv to list them.")
++end
++
+ -- Module exports
+ 
+ function cli.boot(...)
+ 	local _, argv = cli.arguments(...)
++	-- NextBSD: -r is the Startup Manager, not FreeBSD's RB_DFLTROOT.
++	local rest = {}
++	local choose = false
++
++	for _, v in ipairs(argv) do
++		if v == "-r" then
++			choose = true
++		else
++			rest[#rest + 1] = v
++		end
++	end
++	argv = rest
++	if choose and not nbChooseVersion() then
++		return
++	end
+ 	local kernel, argstr = parseBootArgs(argv)
+ 	if kernel ~= nil then
+ 		loader.perform("unload")

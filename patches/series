@@ -18,3 +18,4 @@
 0018-NextBSD-loader-images-no-double-colour-reduction-thr.patch
 0019-NextBSD-loader-graphical-boot-on-virtio-gpu-VMs.patch
 0020-NextBSD-loader-splash-the-logo-without-a-still-spinner.patch
+0021-NextBSD-loader-bootenv-and-boot-r-at-the-prompt.patch
