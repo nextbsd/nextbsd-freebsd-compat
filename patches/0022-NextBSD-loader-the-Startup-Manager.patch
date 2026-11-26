@@ -1,0 +1,812 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pkgdemon <jpm820@gmail.com>
+Date: Thu, 26 Nov 2026 04:10:00 -0600
+Subject: [PATCH] NextBSD: loader, the Startup Manager
+
+The graphical Startup Manager (nextbsd/nextbsd-freebsd-compat#95): every
+installed version of NextBSD (each a ZFS boot environment) as a disk on
+the boot screen, in the boot screen's own colour (bootsplash_style: black
+for NextBSD's splash, grey for Gershwin's).
+
+- Every graphical start with more than one version shows it for
+  nextbsd_startup_delay seconds (3; 0 or NO for the logo alone), counting
+  down as the loader's prompt does; any key stops the count, and at zero
+  the usual version starts.
+- Option (Alt) held while starting opens it with no count. Option is a
+  modifier on its own, so loader.efi reads keys through the extended input
+  protocol with EFI_KEY_STATE_EXPOSED, which asks the firmware for partial
+  keystrokes; it tells Lua with nextbsd_startup_manager=option.
+- boot -r at the prompt opens it where there is a framebuffer (the
+  numbered list otherwise).
+- Left and right choose, Return starts the chosen version once (as
+  bootenv does: nothing on disk changes), V and S add a verbose or
+  single-user start, Esc opens the prompt.
+
+The pieces:
+
+- gfx_fb_text(), gfx.fb_text() and gfx.fb_font(): text in the console
+  font in an exact colour with nothing behind the glyphs (console text
+  always fills its cells with a palette colour), and the font cell and
+  framebuffer size for laying it out.
+- boot-video keyboard: GRAPHICS_MODE ignores the keyboard (0019); the
+  Startup Manager takes it while it shows.
+- stand/lua/startup.lua, called from loader.lua and cli.lua under pcall,
+  so an error in it is printed and the boot goes on.
+- nextbsd-startup-{disk,sel,go}[-dark][@2x].png in stand/images (carried
+  in src-overlay/).
+
+Carried out-of-tree for NextBSD.
+---
+diff --git a/stand/common/gfx_fb.c b/stand/common/gfx_fb.c
+index 71a636109..8e81a41e6 100644
+--- a/stand/common/gfx_fb.c
++++ b/stand/common/gfx_fb.c
+@@ -1593,6 +1593,67 @@ gfx_fb_fill_rgb(uint32_t x1, uint32_t y1, uint32_t x2, uint32_t y2,
+ 	    y2 - y1, 0));
+ }
+ 
++/*
++ * NextBSD: a line of text in the console font at (x, y), in an exact
++ * 24-bit colour, with nothing behind the glyphs, so it sits on whatever
++ * is already there (the Startup Manager's names on its grey).  Console
++ * text always fills its cells with a palette colour; this does not.
++ * Returns the width drawn in pixels, 0 when nothing was drawn.
++ */
++uint32_t
++gfx_fb_text(const char *s, uint32_t x, uint32_t y, uint32_t rgb)
++{
++#if defined(EFI)
++	EFI_GRAPHICS_OUTPUT_BLT_PIXEL *buf, *p;
++#else
++	struct paletteentry *buf, *p;
++#endif
++	teken_attr_t a;
++	const uint8_t *glyph;
++	uint32_t fw, fh, bpl, len, width, i, gx, gy;
++
++	if (gfx_state.tg_fb_type == FB_TEXT || s == NULL)
++		return (0);
++	fw = gfx_state.tg_font.vf_width;
++	fh = gfx_state.tg_font.vf_height;
++	len = strlen(s);
++	if (fw == 0 || fh == 0 || len == 0 ||
++	    x >= gfx_state.tg_fb.fb_width ||
++	    y + fh > gfx_state.tg_fb.fb_height)
++		return (0);
++	if (x + len * fw > gfx_state.tg_fb.fb_width)
++		len = (gfx_state.tg_fb.fb_width - x) / fw;
++	if (len == 0)
++		return (0);
++	width = len * fw;
++	buf = calloc(width * fh, sizeof(*buf));
++	if (buf == NULL)
++		return (0);
++	memset(&a, 0, sizeof(a));
++	bpl = (fw + 7) / 8;
++	for (i = 0; i < len; i++) {
++		glyph = font_lookup(&gfx_state.tg_font,
++		    (teken_char_t)(unsigned char)s[i], &a);
++		if (glyph == NULL)
++			continue;
++		for (gy = 0; gy < fh; gy++) {
++			for (gx = 0; gx < fw; gx++) {
++				if ((glyph[gy * bpl + gx / 8] &
++				    (0x80 >> (gx % 8))) == 0)
++					continue;
++				p = &buf[gy * width + i * fw + gx];
++				p->Red = (rgb >> 16) & 0xff;
++				p->Green = (rgb >> 8) & 0xff;
++				p->Blue = rgb & 0xff;
++				p->Reserved = 0xff;
++			}
++		}
++	}
++	gfx_fb_cons_display(x, y, width, fh, buf);
++	free(buf);
++	return (width);
++}
++
+ /*
+  * draw rectangle in framebuffer using gfx coordinates.
+  */
+diff --git a/stand/common/gfx_fb.h b/stand/common/gfx_fb.h
+index 7b396ffb9..b776ee775 100644
+--- a/stand/common/gfx_fb.h
++++ b/stand/common/gfx_fb.h
+@@ -268,6 +268,7 @@ void gfx_fb_setpixel(uint32_t, uint32_t);
+ void gfx_fb_drawrect(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
+ void gfx_term_drawrect(uint32_t, uint32_t, uint32_t, uint32_t);
+ int gfx_fb_fill_rgb(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
++uint32_t gfx_fb_text(const char *, uint32_t, uint32_t, uint32_t);
+ 
+ /*
+  * NextBSD boot splash (E19): the style, scale, logo asset and geometry
+diff --git a/stand/efi/libefi/efi_console.c b/stand/efi/libefi/efi_console.c
+index 7ce601fd2..e122eaecc 100644
+--- a/stand/efi/libefi/efi_console.c
++++ b/stand/efi/libefi/efi_console.c
+@@ -75,6 +75,11 @@ static void boot_video_replay(void);
+  * Darwin, does not.
+  */
+ static SIMPLE_TEXT_OUTPUT_INTERFACE *bv_serial_out;
++/*
++ * NextBSD: the Startup Manager (stand/lua/startup.lua) takes the keyboard
++ * in GRAPHICS_MODE, which otherwise ignores it: boot-video keyboard.
++ */
++static bool bv_keyboard;
+ static SIMPLE_INPUT_INTERFACE *bv_serial_in;
+ static void boot_video_find_serial(void);
+ 
+@@ -1425,7 +1430,7 @@ efi_boot_video_serial(void)
+ }
+ 
+ COMMAND_SET(boot_video, "boot-video",
+-    "boot-video mode: status, is-graphics, text", command_boot_video);
++    "boot-video mode: status, is-graphics, text, keyboard", command_boot_video);
+ 
+ static int
+ command_boot_video(int argc, char *argv[])
+@@ -1441,8 +1446,13 @@ command_boot_video(int argc, char *argv[])
+ 		efi_boot_video_text();
+ 		return (CMD_OK);
+ 	}
++	/* The Startup Manager reads keys while the screen stays graphics. */
++	if (strcmp(argv[1], "keyboard") == 0) {
++		bv_keyboard = true;
++		return (CMD_OK);
++	}
+ 	snprintf(command_errbuf, sizeof(command_errbuf),
+-	    "usage: boot-video [status | is-graphics | text]");
++	    "usage: boot-video [status | is-graphics | text | keyboard]");
+ 	return (CMD_ERROR);
+ }
+ 
+@@ -1581,8 +1591,9 @@ efi_cons_getchar(void)
+ 
+ 	key_pending = 0;
+ 
+-	/* GRAPHICS_MODE: the keyboard is ignored; the serial port is not. */
+-	if (boot_v_display == GRAPHICS_MODE) {
++	/* GRAPHICS_MODE: the keyboard is ignored (unless the Startup Manager
++	   took it); the serial port is not. */
++	if (boot_v_display == GRAPHICS_MODE && !bv_keyboard) {
+ 		EFI_INPUT_KEY key;
+ 
+ 		if (bv_serial_in != NULL &&
+@@ -1616,8 +1627,9 @@ efi_cons_poll(void)
+ 	if (!boot_services_active)
+ 		return (0);
+ 
+-	/* GRAPHICS_MODE: only the serial port behind the screen. */
+-	if (boot_v_display == GRAPHICS_MODE) {
++	/* GRAPHICS_MODE: only the serial port behind the screen, unless the
++	   Startup Manager took the keyboard. */
++	if (boot_v_display == GRAPHICS_MODE && !bv_keyboard) {
+ 		if (bv_serial_in == NULL)
+ 			return (0);
+ 		key_pending = BS->CheckEvent(bv_serial_in->WaitForKey) ==
+diff --git a/stand/efi/loader/main.c b/stand/efi/loader/main.c
+index 0d153500c..8a295706d 100644
+--- a/stand/efi/loader/main.c
++++ b/stand/efi/loader/main.c
+@@ -753,30 +753,77 @@ boot_video_args(int argc, CHAR16 *argv[])
+ static int boot_hotkey_howto;
+ static bool boot_hotkey_esc;
+ 
++static void
++boot_hotkey_key(const EFI_INPUT_KEY *key)
++{
++	if (key->ScanCode == SCAN_ESC)
++		boot_hotkey_esc = true;
++	switch (key->UnicodeChar) {
++	case 'v': case 'V':
++		boot_hotkey_howto |= RB_VERBOSE;
++		break;
++	case 's': case 'S':
++		boot_hotkey_howto |= RB_SINGLE;
++		break;
++	}
++}
++
++/*
++ * Option (Alt on a PC keyboard) opens the Startup Manager (stand/lua/
++ * startup.lua).  Option is a modifier on its own: plain ReadKeyStroke()
++ * never reports it, so the keys are read through the extended input
++ * protocol, with EFI_KEY_STATE_EXPOSED asking the firmware for partial
++ * keystrokes too (a modifier with no key).  Firmware without the
++ * protocol, or that ignores the toggle, never reports Option; there the
++ * Startup Manager is reached from the prompt, boot -r.  The loader tells
++ * Lua through nextbsd_startup_manager=option.
++ */
++static EFI_GUID boot_hotkey_ex_guid = EFI_SIMPLE_TEXT_INPUT_EX_PROTOCOL_GUID;
++
+ static void
+ boot_hotkeys_read(void)
+ {
++	EFI_SIMPLE_TEXT_INPUT_EX_PROTOCOL *ex = NULL;
++	EFI_KEY_TOGGLE_STATE toggles;
++	EFI_KEY_DATA kd;
+ 	EFI_INPUT_KEY key;
++	bool option = false;
+ 	int ms;
+ 
++	if (BS->HandleProtocol(ST->ConsoleInHandle, &boot_hotkey_ex_guid,
++	    (void **)&ex) != EFI_SUCCESS)
++		ex = NULL;
++	if (ex != NULL) {
++		toggles = EFI_TOGGLE_STATE_VALID | EFI_KEY_STATE_EXPOSED;
++		(void)ex->SetState(ex, &toggles);
++	}
+ 	for (ms = 0; ms < BOOT_HOTKEY_POLL_MS; ms += BOOT_HOTKEY_STEP_MS) {
+-		while (ST->ConIn->ReadKeyStroke(ST->ConIn, &key) ==
+-		    EFI_SUCCESS) {
+-			if (key.ScanCode == SCAN_ESC)
+-				boot_hotkey_esc = true;
+-			switch (key.UnicodeChar) {
+-			case 'v': case 'V':
+-				boot_hotkey_howto |= RB_VERBOSE;
+-				break;
+-			case 's': case 'S':
+-				boot_hotkey_howto |= RB_SINGLE;
+-				break;
++		if (ex != NULL) {
++			while (ex->ReadKeyStrokeEx(ex, &kd) == EFI_SUCCESS) {
++				if ((kd.KeyState.KeyShiftState &
++				    EFI_SHIFT_STATE_VALID) != 0 &&
++				    (kd.KeyState.KeyShiftState &
++				    (EFI_LEFT_ALT_PRESSED |
++				    EFI_RIGHT_ALT_PRESSED)) != 0)
++					option = true;
++				boot_hotkey_key(&kd.Key);
+ 			}
++		} else {
++			while (ST->ConIn->ReadKeyStroke(ST->ConIn, &key) ==
++			    EFI_SUCCESS)
++				boot_hotkey_key(&key);
+ 		}
+-		if (boot_hotkey_howto != 0 || boot_hotkey_esc)
+-			return;
++		if (boot_hotkey_howto != 0 || boot_hotkey_esc || option)
++			break;
+ 		BS->Stall(BOOT_HOTKEY_STEP_MS * 1000);
+ 	}
++	if (ex != NULL) {
++		toggles = EFI_TOGGLE_STATE_VALID;
++		(void)ex->SetState(ex, &toggles);
++	}
++	/* Option with V or S held too: those win, as on a Mac. */
++	if (option && boot_hotkey_howto == 0 && !boot_hotkey_esc)
++		setenv("nextbsd_startup_manager", "option", 1);
+ }
+ 
+ /* The boot flags the startup keys asked for (RB_VERBOSE, RB_SINGLE). */
+diff --git a/stand/images/Makefile b/stand/images/Makefile
+index acc2ea0fa..50b2cd75e 100644
+--- a/stand/images/Makefile
++++ b/stand/images/Makefile
+@@ -8,6 +8,14 @@ FILES+=	freebsd-brand-rev.png freebsd-brand.png freebsd-install-brand-rev.png \
+ # nextbsd-freebsd-compat src-overlay/stand/images/).
+ FILES+=	nextbsd-logo.png nextbsd-logo@2x.png \
+ 	nextbsd-spinner.png nextbsd-spinner@2x.png
++# The Startup Manager (stand/lua/startup.lua): a disk, the chosen
++# version's tile and the start button, 1x and 2x; -dark for a black
++# boot screen.
++FILES+=	nextbsd-startup-disk.png nextbsd-startup-disk@2x.png \
++	nextbsd-startup-sel.png nextbsd-startup-sel@2x.png \
++	nextbsd-startup-go.png nextbsd-startup-go@2x.png \
++	nextbsd-startup-sel-dark.png nextbsd-startup-sel-dark@2x.png \
++	nextbsd-startup-go-dark.png nextbsd-startup-go-dark@2x.png
+ 
+ FILESDIR=  /boot/images
+ 
+diff --git a/stand/liblua/gfx_utils.c b/stand/liblua/gfx_utils.c
+index 1ea6d339e..5236c3c3e 100644
+--- a/stand/liblua/gfx_utils.c
++++ b/stand/liblua/gfx_utils.c
+@@ -329,6 +329,51 @@ lua_boot_splash(lua_State *L)
+ 	return 1;
+ }
+ 
++/*
++ * gfx.fb_text(text, x, y, r, g, b)
++ * NextBSD: text in the console font in an exact colour, with nothing
++ * behind it (gfx_fb_text); returns the width drawn in pixels.
++ */
++static int
++lua_fb_text(lua_State *L)
++{
++	const char *s;
++	uint32_t x, y, r, g, b;
++
++	if (lua_gettop(L) != 6) {
++		lua_pushinteger(L, 0);
++		return 1;
++	}
++	s = luaL_checkstring(L, 1);
++	x = luaL_checknumber(L, 2);
++	y = luaL_checknumber(L, 3);
++	r = luaL_checkinteger(L, 4) & 0xff;
++	g = luaL_checkinteger(L, 5) & 0xff;
++	b = luaL_checkinteger(L, 6) & 0xff;
++	lua_pushinteger(L, gfx_fb_text(s, x, y, (r << 16) | (g << 8) | b));
++	return 1;
++}
++
++/*
++ * gfx.fb_font()
++ * NextBSD: the console font's cell and the framebuffer's size, for
++ * laying out gfx.fb_text(): fw, fh, width, height; nil without a
++ * framebuffer.
++ */
++static int
++lua_fb_font(lua_State *L)
++{
++	if (gfx_state.tg_fb_type == FB_TEXT) {
++		lua_pushnil(L);
++		return 1;
++	}
++	lua_pushinteger(L, gfx_state.tg_font.vf_width);
++	lua_pushinteger(L, gfx_state.tg_font.vf_height);
++	lua_pushinteger(L, gfx_state.tg_fb.fb_width);
++	lua_pushinteger(L, gfx_state.tg_fb.fb_height);
++	return 4;
++}
++
+ /*
+  * gfx.fb_putmask(name, x, y, r, g, b)
+  * Blend an RGBA PNG at its own size with its top-left corner at (x, y),
+@@ -385,10 +430,12 @@ static const struct luaL_Reg gfxlib[] = {
+ 	REG_SIMPLE(fb_bezier),
+ 	REG_SIMPLE(fb_drawrect),
+ 	REG_SIMPLE(fb_fill_rgb),
++	REG_SIMPLE(fb_font),
+ 	REG_SIMPLE(fb_line),
+ 	REG_SIMPLE(fb_putmask),
+ 	REG_SIMPLE(fb_putimage),
+ 	REG_SIMPLE(fb_setpixel),
++	REG_SIMPLE(fb_text),
+ 	REG_SIMPLE(term_drawrect),
+ 	REG_SIMPLE(term_putimage),
+ 	{ NULL, NULL },
+diff --git a/stand/lua/Makefile b/stand/lua/Makefile
+index d319261e1..f376661ae 100644
+--- a/stand/lua/Makefile
++++ b/stand/lua/Makefile
+@@ -29,6 +29,7 @@ FILES=	cli.lua \
+ 	gfx-orbbw.lua \
+ 	menu.lua \
+ 	password.lua \
+-	screen.lua
++	screen.lua \
++	startup.lua
+ 
+ .include <bsd.prog.mk>
+diff --git a/stand/lua/cli.lua b/stand/lua/cli.lua
+index a1a1e0d5f..373ad7936 100644
+--- a/stand/lua/cli.lua
++++ b/stand/lua/cli.lua
+@@ -221,8 +221,21 @@ function cli.boot(...)
+ 		end
+ 	end
+ 	argv = rest
+-	if choose and not nbChooseVersion() then
+-		return
++	if choose then
++		-- The graphical Startup Manager where there's a framebuffer:
++		-- a choice boots, Esc comes back to the prompt.
++		local ok, startup = pcall(require, "startup")
++		if ok and startup.available() then
++			local ran, err = pcall(startup.run)
++			require("screen").clear()
++			if not ran then
++				print("Startup Manager: " .. tostring(err))
++			end
++			return
++		end
++		if not nbChooseVersion() then
++			return
++		end
+ 	end
+ 	local kernel, argstr = parseBootArgs(argv)
+ 	if kernel ~= nil then
+diff --git a/stand/lua/loader.lua b/stand/lua/loader.lua
+index 61f61cba0..c0e46e86c 100644
+--- a/stand/lua/loader.lua
++++ b/stand/lua/loader.lua
+@@ -91,6 +91,43 @@ if core.isUEFIBoot() and gfx ~= nil and gfx.boot_splash ~= nil and
+ 		end
+ 	end
+ end
++-- NextBSD: the Startup Manager (startup.lua), over the splash.  Option
++-- held (loader.efi sets nextbsd_startup_manager=option) opens it to stay;
++-- otherwise, with more than one version installed, it shows for
++-- nextbsd_startup_delay seconds (3; 0 or NO for the logo alone) and starts
++-- the usual version unless a key is pressed.  A choice boots from there;
++-- Esc comes back here and stops at the prompt.  An error in it never stops
++-- the boot: it is printed, and the usual version starts.
++local function nbStartupDelay()
++	local d = loader.getenv("nextbsd_startup_delay")
++	if d == nil then
++		return 3
++	end
++	if d == "NO" or d == "no" then
++		return 0
++	end
++	return tonumber(d) or 3
++end
++
++if core.isUEFIBoot() and gfx ~= nil and gfx.fb_text ~= nil and
++    loader.perform("boot-video is-graphics") == 0 then
++	local option = loader.getenv("nextbsd_startup_manager") == "option"
++	local delay = nbStartupDelay()
++	local ok, prompt = pcall(function()
++		local startup = require("startup")
++		if option then
++			return startup.run()
++		elseif delay > 0 and startup.worthShowing() then
++			return startup.run(delay)
++		end
++		return false
++	end)
++	if not ok then
++		print("Startup Manager: " .. tostring(prompt))
++	elseif prompt then
++		loader.setenv("autoboot_delay", "NO")
++	end
++end
+ -- Our console may have been setup with different settings before we get
+ -- here, so make sure we reset everything back to default.
+ if color.isEnabled() then
+diff --git a/stand/lua/startup.lua b/stand/lua/startup.lua
+new file mode 100644
+index 000000000..92b8f737f
+--- /dev/null
++++ b/stand/lua/startup.lua
+@@ -0,0 +1,345 @@
++--
++-- SPDX-License-Identifier: BSD-2-Clause
++--
++-- NextBSD: the Startup Manager (nextbsd/nextbsd-freebsd-compat#95).
++--
++-- Every graphical start with more than one version shows it for a few
++-- seconds, counting down as the loader's prompt does (nextbsd_startup_delay,
++-- 3 unless loader.conf says otherwise; 0 turns it off), and any key stops
++-- the count.  Holding Option (Alt on a PC keyboard) while the computer
++-- starts, or boot -r at the loader prompt, opens it with no count: every
++-- installed version of NextBSD (each
++-- a ZFS boot environment, named after its build) as a disk on the boot
++-- screen's grey.  Left and right choose, Return starts the chosen one
++-- this once (nothing on disk changes, so the next restart starts the
++-- usual one again), V and S add a verbose or single-user start, and Esc
++-- opens the loader prompt.  To change which version starts every time,
++-- use Installed Versions in Update.
++--
++-- Drawn with the loader's framebuffer: gfx.fb_fill_rgb for the grey,
++-- PNGs from /boot/images blended with gfx.fb_putimage, and the names in
++-- the console font with gfx.fb_text, which leaves the grey behind them.
++--
++
++local config = require("config")
++local core = require("core")
++
++local startup = {}
++
++-- The boot screen's own colour (bootsplash_style, from gfx.boot_splash):
++-- black for NextBSD's, grey for Gershwin's.  The tile and button images
++-- have a version for each, chosen by how light the colour is.
++local BG = 0x000000
++local DARK = true
++local NAME = 0xe8e8ec
++local HINT = 0xe3e6ea
++local ON = 0x00d4ff
++local OFF = 0xc8ccd2
++
++local IMAGES = "/boot/images/"
++
++-- The loader's Lua has no math or table library (interp_lua.c).
++local function max(a, b)
++	return a > b and a or b
++end
++
++local function min(a, b)
++	return a < b and a or b
++end
++
++local function rgb(c)
++	return (c >> 16) & 0xff, (c >> 8) & 0xff, c & 0xff
++end
++
++local function image(name, scale)
++	if scale == 2 then
++		return IMAGES .. name .. "@2x.png"
++	end
++	return IMAGES .. name .. ".png"
++end
++
++-- The installed versions, the one the pool starts first.
++local function versions()
++	local list = {}
++	local rest = {}
++	local default = core.bootenvDefault()
++
++	for _, be in ipairs(core.bootenvList()) do
++		local v = {
++			be = be,
++			name = be:match("/ROOT/(.+)$") or be,
++		}
++		if be == default then
++			list[1] = v
++		else
++			rest[#rest + 1] = v
++		end
++	end
++	for _, v in ipairs(rest) do
++		list[#list + 1] = v
++	end
++	return list
++end
++
++-- The usual boot splash, for the moment between a choice and the
++-- kernel's first paint, as loader.lua paints it.
++local function splash()
++	local s = gfx.boot_splash()
++
++	if s == nil then
++		return
++	end
++	gfx.fb_fill_rgb(rgb(s.bg))
++	if s.logo ~= nil then
++		gfx.fb_putimage(s.logo, s.logo_x, s.logo_y,
++		    s.logo_x + s.logo_w, s.logo_y + s.logo_h, 2)
++	end
++end
++
++local function text(str, x, y, color)
++	local r, g, b = rgb(color)
++
++	return gfx.fb_text(str, x, y, r, g, b)
++end
++
++local function centred(str, cx, y, color, fw)
++	text(str, cx - (#str * fw) // 2, y, color)
++end
++
++-- One screen: the disks in a row, the chosen one on a darker tile, the
++-- start button under them, the V and S options and the hints.
++local function draw(list, sel, flags, geo)
++	local s, fw, fh, w = geo.scale, geo.fw, geo.fh, geo.w
++	local tw, th, gap = 180 * s, 160 * s, 24 * s
++	local d = 96 * s
++	-- As many as fit, the chosen one among them.
++	local fit = max(1, (w - 40 * s + gap) // (tw + gap))
++	local first = 1
++
++	if #list > fit then
++		first = max(1, min(sel - fit // 2, #list - fit + 1))
++	end
++	local last = min(#list, first + fit - 1)
++	local n = last - first + 1
++	local x0 = (w - (n * tw + (n - 1) * gap)) // 2
++	local y0 = geo.h * 30 // 100
++
++	gfx.fb_fill_rgb(rgb(BG))
++	for i = first, last do
++		local x = x0 + (i - first) * (tw + gap)
++		local name = list[i].name
++		local room = (tw - 8 * s) // fw
++
++		if i == sel then
++			gfx.fb_putimage(image(DARK and "nextbsd-startup-sel-dark" or
++			    "nextbsd-startup-sel", s),
++			    x, y0, x + tw, y0 + th, 2)
++		end
++		gfx.fb_putimage(image("nextbsd-startup-disk", s),
++		    x + (tw - d) // 2, y0 + 10 * s,
++		    x + (tw - d) // 2 + d, y0 + 10 * s + d, 2)
++		if #name > room then
++			name = name:sub(1, room - 1) .. "~"
++		end
++		centred(name, x + tw // 2, y0 + 10 * s + d + 10 * s, NAME, fw)
++	end
++
++	local g = 36 * s
++	local gy = y0 + th + 28 * s
++	gfx.fb_putimage(image(DARK and "nextbsd-startup-go-dark" or
++	    "nextbsd-startup-go", s),
++	    w // 2 - g // 2, gy, w // 2 - g // 2 + g, gy + g, 2)
++
++	local oy = gy + g + 18 * s
++	local v, sg = "V Verbose", "S Single-user"
++	local ow = (#v + 4 + #sg) * fw
++	local ox = w // 2 - ow // 2
++	text(v, ox, oy, flags.v and ON or OFF)
++	text(sg, ox + (#v + 4) * fw, oy, flags.s and ON or OFF)
++
++	geo.count_y = oy + fh * 2
++	local hy = geo.count_y + fh * 2
++	centred("Left and right choose.  Return starts it this once.",
++	    w // 2, hy, HINT, fw)
++	centred("V and S add options.  Esc opens the loader prompt.",
++	    w // 2, hy + fh + 4 * s, HINT, fw)
++	centred("To change which version starts every time, use " ..
++	    "Installed Versions in Update.", w // 2, hy + 2 * (fh + 4 * s),
++	    HINT, fw)
++end
++
++-- The countdown line, redrawn on its own each second.
++local function count(geo, name, secs)
++	local r, g, b = rgb(BG)
++
++	gfx.fb_fill_rgb(r, g, b, 0, geo.count_y, geo.w, geo.count_y + geo.fh)
++	if secs ~= nil then
++		centred("Starting " .. name .. " in " .. secs ..
++		    (secs == 1 and " second" or " seconds") ..
++		    ".  Press any key to choose.", geo.w // 2, geo.count_y,
++		    NAME, geo.fw)
++	end
++end
++
++-- Start a version once: point the loader at it (as bootenv does) and
++-- boot, with -v or -s when chosen.
++local function start(list, sel, flags)
++	local v = list[sel]
++	local args = ""
++
++	if sel ~= 1 then
++		loader.setenv("vfs.root.mountfrom", v.be)
++		loader.setenv("currdev", v.be .. ":")
++		config.reload()
++		if loader.getenv("kernelname") ~= nil then
++			loader.perform("unload")
++		end
++	end
++	if flags.v then
++		args = args .. " -v"
++	end
++	if flags.s then
++		args = args .. " -s"
++	end
++	if args ~= "" then
++		-- Verbose and single-user starts are text, as with Command-V
++		-- and Command-S held.
++		loader.perform("boot-video text")
++	else
++		splash()
++	end
++	core.boot(args)
++end
++
++-- A key: "left", "right", "return", "esc", or the character.
++local function key()
++	if not io.ischar() then
++		return nil
++	end
++	local ch = io.getchar()
++
++	if ch == 27 then
++		-- An arrow arrives as ESC [ C; Esc alone is just ESC.
++		for _ = 1, 30 do
++			if io.ischar() then
++				break
++			end
++			loader.delay(1000)
++		end
++		if not io.ischar() then
++			return "esc"
++		end
++		local c2 = io.getchar()
++		if c2 == 91 or c2 == 79 then
++			local c3 = io.getchar()
++			if c3 == 67 then
++				return "right"
++			elseif c3 == 68 then
++				return "left"
++			end
++		end
++		return nil
++	end
++	if ch == 13 or ch == 10 then
++		return "return"
++	end
++	if ch > 0 and ch < 256 then
++		return string.char(ch):lower()
++	end
++	return "other"
++end
++
++-- Whether the Startup Manager can draw here: a framebuffer, and this
++-- loader's gfx.fb_text.
++function startup.available()
++	return gfx ~= nil and gfx.fb_text ~= nil and gfx.fb_font ~= nil and
++	    gfx.fb_font() ~= nil
++end
++
++-- Whether there is more than one version to choose from.
++function startup.worthShowing()
++	return #versions() > 1
++end
++
++-- Show the Startup Manager.  With secs, it counts down and starts the
++-- usual version at zero unless a key is pressed first.  Returns only when
++-- Esc asks for the prompt (or there is nothing to choose); a choice boots.
++function startup.run(secs)
++	if not startup.available() then
++		return false
++	end
++	local list = versions()
++	if #list == 0 then
++		return false
++	end
++	-- Graphics mode ignores the keyboard otherwise (efi_console.c).
++	loader.perform("boot-video keyboard")
++	local fw, fh, w, h = gfx.fb_font()
++	local splash_info = gfx.boot_splash()
++	local geo = {
++		fw = fw, fh = fh, w = w, h = h,
++		scale = (splash_info ~= nil and splash_info.scale == 2) and 2 or 1,
++	}
++	if splash_info ~= nil then
++		BG = splash_info.bg
++		local r, g, b = rgb(BG)
++		DARK = r + g + b < 3 * 0x40
++	end
++	local sel, flags = 1, { v = false, s = false }
++	local dirty = true
++	local left = secs
++	local ticks = 0
++
++	while true do
++		if dirty then
++			draw(list, sel, flags, geo)
++			count(geo, list[sel].name, left)
++			dirty = false
++		end
++		local k = key()
++		if k == nil then
++			loader.delay(20000)
++			if left ~= nil then
++				ticks = ticks + 1
++				if ticks >= 50 then
++					ticks = 0
++					left = left - 1
++					if left <= 0 then
++						start(list, sel, flags)
++						loader.perform("boot-video text")
++						return true
++					end
++					count(geo, list[sel].name, left)
++				end
++			end
++		else
++			if left ~= nil then
++				left = nil
++				dirty = true
++			end
++			if k == "left" then
++				sel = sel > 1 and sel - 1 or #list
++				dirty = true
++			elseif k == "right" then
++				sel = sel < #list and sel + 1 or 1
++				dirty = true
++			elseif k == "return" then
++				start(list, sel, flags)
++				-- The boot failed: back to the prompt with its message.
++				loader.perform("boot-video text")
++				return true
++			elseif k == "v" then
++				flags.v = not flags.v
++				dirty = true
++			elseif k == "s" then
++				flags.s = not flags.s
++				dirty = true
++			elseif k == "esc" then
++				loader.perform("boot-video text")
++				return true
++			end
++		end
++	end
++end
++
++return startup
+-- 
+2.54.0 (Apple Git-157)

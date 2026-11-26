@@ -294,3 +294,32 @@ is the text form of the Startup Manager. On NextBSD `-r` no longer means
 FreeBSD's "use the default root". A version started here changes nothing
 on the pool: the next restart starts the usual one (`bectl activate`, or
 Installed Versions in Update). Only `stand/lua/cli.lua` changes.
+
+## `0022`: the Startup Manager
+
+The graphical Startup Manager
+([#95](https://github.com/nextbsd/nextbsd-freebsd-compat/issues/95)): every
+installed version as a disk on the boot screen, in the boot screen's own
+colour (`bootsplash_style`: black for NextBSD's splash, grey for
+Gershwin's).
+
+- **Every graphical start** with more than one version shows it for
+  `nextbsd_startup_delay` seconds (3; `0` or `NO` in loader.conf for the
+  logo alone), counting down. Any key stops the count; at zero the usual
+  version starts.
+- **Option (Alt) held** while starting opens it with no count.
+  `loader.efi` reads the startup keys through the extended input protocol
+  with `EFI_KEY_STATE_EXPOSED`, so firmware that reports a modifier on its
+  own is seen; it sets `nextbsd_startup_manager=option`.
+- **`boot -r`** at the prompt opens it where there is a framebuffer; the
+  numbered list of `0021` otherwise.
+- **Keys:** ← → choose, Return starts the chosen version once (as `bootenv`
+  does), V and S add a verbose or single-user start, Esc opens the prompt.
+
+New loader pieces: `gfx.fb_text()` / `gfx.fb_font()` (console-font text in
+an exact colour with nothing behind it, and the cell and screen size),
+`boot-video keyboard` (graphics mode ignores the keyboard, `0019`, until
+the Startup Manager takes it), and `stand/lua/startup.lua`, run under
+`pcall` so an error is printed and the boot goes on. Its images,
+`nextbsd-startup-*.png` (1x, 2x, and `-dark` for a black screen), are in
+`src-overlay/stand/images/`.
